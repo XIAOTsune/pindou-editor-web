@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="小T拼豆：离线拼豆图纸制作工具，支持导入图片、扣图、像素化、映射拼豆色表、统计数量并导出图纸。"
+    />
+    <meta name="theme-color" content="#1f7a8c" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="拼豆图纸" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>小T拼豆图纸编辑器</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <h1>小T拼豆</h1>
+            <p id="projectSubtitle">导入图片后开始生成拼豆图纸</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button class="ghost-button" id="restoreDraftButton" type="button">草稿</button>
+          <button class="ghost-button" id="loadProjectButton" type="button">载入</button>
+          <button class="ghost-button" id="saveProjectButton" type="button">保存</button>
+          <button class="primary-button" id="exportPdfButtonTop" type="button">导出</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="preview-panel" aria-label="图纸预览">
+          <div class="preview-toolbar">
+            <div class="preview-meta">
+              <span id="previewModeLabel">图片预览</span>
+              <strong id="previewSizeLabel">未导入</strong>
+            </div>
+            <div class="preview-toggles">
+              <label class="switch">
+                <input id="gridToggle" type="checkbox" checked />
+                <span>格线</span>
+              </label>
+              <label class="switch">
+                <input id="boardToggle" type="checkbox" checked />
+                <span>板界</span>
+              </label>
+              <label class="switch">
+                <input id="codeToggle" type="checkbox" checked />
+                <span>色号</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="previewCanvas"></canvas>
+            <div class="empty-import" id="emptyImport">
+              <div class="empty-visual" aria-hidden="true">
+                <span></span><span></span><span></span><span></span>
+              </div>
+              <h2>从一张图片开始</h2>
+              <p>本地处理图片，先生成可审查的拼豆图纸原型。</p>
+              <label class="primary-button file-label">
+                导入图片
+                <input id="imageInput" type="file" accept="image/*" />
+              </label>
+            </div>
+          </div>
+
+          <div class="status-line" id="statusLine">准备就绪</div>
+          <div class="pwa-line" id="pwaStatus">首次打开需要联网，加载完成后可离线使用。</div>
+        </section>
+
+        <aside class="tool-panel" aria-label="编辑工具">
+          <nav class="step-tabs" aria-label="编辑步骤">
+            <button class="step-tab active" data-tab="image" type="button">图片</button>
+            <button class="step-tab" data-tab="size" type="button">尺寸</button>
+            <button class="step-tab" data-tab="palette" type="button">色表</button>
+            <button class="step-tab" data-tab="replace" type="button">替换</button>
+            <button class="step-tab" data-tab="stats" type="button">统计</button>
+          </nav>
+
+          <section class="tool-section active" id="tab-image">
+            <div class="section-head">
+              <h2>导入与扣图</h2>
+              <label class="secondary-button file-label">
+                换图
+                <input id="imageInputSecondary" type="file" accept="image/*" />
+              </label>
+            </div>
+
+            <div class="segmented" role="group" aria-label="扣图工具">
+              <button class="segment active" data-tool="view" type="button">查看</button>
+              <button class="segment" data-tool="magic" type="button">魔棒</button>
+              <button class="segment" data-tool="erase" type="button">橡皮</button>
+              <button class="segment" data-tool="restore" type="button">恢复</button>
+            </div>
+
+            <label class="field">
+              <span>魔棒容差</span>
+              <input id="toleranceInput" type="range" min="0" max="160" value="42" />
+              <output id="toleranceValue">42</output>
+            </label>
+
+            <label class="field">
+              <span>笔刷大小</span>
+              <input id="brushInput" type="range" min="4" max="80" value="24" />
+              <output id="brushValue">24</output>
+            </label>
+
+            <label class="field">
+              <span>透明阈值</span>
+              <input id="alphaInput" type="range" min="0" max="255" value="20" />
+              <output id="alphaValue">20</output>
+            </label>
+
+            <label class="field">
+              <span>对比度</span>
+              <input id="contrastInput" type="range" min="-50" max="100" value="0" />
+              <output id="contrastValue">0</output>
+            </label>
+
+            <label class="field">
+              <span>饱和度</span>
+              <input id="saturationInput" type="range" min="-50" max="100" value="0" />
+              <output id="saturationValue">0</output>
+            </label>
+
+            <div class="button-row wrap">
+              <button class="secondary-button" id="autoCutoutButton" type="button">一键去背景</button>
+              <button class="ghost-button" id="undoMaskButton" type="button">撤销扣图</button>
+              <button class="ghost-button" id="applyAlphaButton" type="button">应用透明阈值</button>
+              <button class="danger-button" id="resetMaskButton" type="button">重置蒙版</button>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="section-head compact">
+              <h3>裁剪</h3>
+              <button class="ghost-button small" id="resetCropButton" type="button">重置</button>
+            </div>
+            <label class="number-field full">
+              <span>裁剪比例</span>
+              <select id="cropAspectSelect">
+                <option value="free" selected>自由</option>
+                <option value="original">原图比例</option>
+                <option value="1:1">1:1</option>
+                <option value="4:3">4:3</option>
+                <option value="3:4">3:4</option>
+                <option value="16:9">16:9</option>
+                <option value="9:16">9:16</option>
+              </select>
+            </label>
+            <div class="helper-note compact-note">
+              在图片预览中拖动裁剪框，拖边缘或角点可调整范围。
+            </div>
+          </section>
+
+          <section class="tool-section" id="tab-size">
+            <div class="section-head">
+              <h2>图纸尺寸</h2>
+            </div>
+
+            <div class="number-grid">
+              <label class="number-field">
+                <span>横向颗数</span>
+                <input id="beadWidthInput" type="number" inputmode="numeric" min="8" max="300" value="64" />
+              </label>
+              <label class="number-field">
+                <span>纵向颗数</span>
+                <input id="beadHeightInput" type="number" inputmode="numeric" min="8" max="300" value="64" />
+              </label>
+            </div>
+
+            <label class="check-row">
+              <input id="aspectToggle" type="checkbox" checked />
+              <span>锁定图片比例</span>
+            </label>
+
+            <div class="number-grid">
+              <label class="number-field">
+                <span>单颗毫米</span>
+                <input id="beadMmInput" type="number" inputmode="decimal" min="2" max="10" step="0.5" value="5" />
+              </label>
+              <label class="number-field">
+                <span>板宽</span>
+                <input id="boardWidthInput" type="number" inputmode="numeric" min="8" max="60" value="29" />
+              </label>
+              <label class="number-field">
+                <span>板高</span>
+                <input id="boardHeightInput" type="number" inputmode="numeric" min="8" max="60" value="29" />
+              </label>
+            </div>
+
+            <div class="metric-grid" id="sizeMetrics"></div>
+          </section>
+
+          <section class="tool-section" id="tab-palette">
+            <div class="section-head">
+              <h2>色表映射</h2>
+            </div>
+
+            <label class="number-field full">
+              <span>像素策略</span>
+              <select id="samplingModeSelect">
+                <option value="shape" selected>形状优先</option>
+                <option value="balanced">均衡</option>
+                <option value="smooth">照片平滑</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>前景阈值</span>
+              <input id="coverageInput" type="range" min="5" max="70" value="18" />
+              <output id="coverageValue">18%</output>
+            </label>
+
+            <label class="field">
+              <span>边缘增强</span>
+              <input id="edgeInput" type="range" min="0" max="100" value="35" />
+              <output id="edgeValue">35</output>
+            </label>
+
+            <label class="number-field full">
+              <span>最多颜色数</span>
+              <input id="maxColorsInput" type="number" inputmode="numeric" min="2" max="64" value="32" />
+            </label>
+
+            <label class="number-field full">
+              <span>抖动</span>
+              <select id="ditherSelect">
+                <option value="none">关闭</option>
+                <option value="ordered">轻微 Ordered</option>
+              </select>
+            </label>
+
+            <div class="divider"></div>
+
+            <div class="section-head compact">
+              <h3>纯色锁边</h3>
+              <label class="check-row compact-check">
+                <input id="borderEnabledInput" type="checkbox" />
+                <span>启用</span>
+              </label>
+            </div>
+
+            <div class="border-card" id="borderControls">
+              <div class="border-current">
+                <span class="swatch" id="borderColorCurrent"></span>
+                <span class="list-text" id="borderColorLabel"></span>
+                <button class="ghost-button small" id="borderPickEdgeButton" type="button">从边缘取色</button>
+              </div>
+              <div class="border-palette-grid" id="borderPaletteGrid"></div>
+
+              <div class="number-grid">
+                <label class="field compact-field">
+                  <span>粗细</span>
+                  <input id="borderThicknessInput" type="range" min="1" max="3" value="1" />
+                  <output id="borderThicknessValue">1</output>
+                </label>
+                <label class="number-field">
+                  <span>方式</span>
+                  <select id="borderModeSelect">
+                    <option value="outside">外侧加边</option>
+                    <option value="inside">内侧锁边</option>
+                    <option value="both">内外都做</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="check-row border-check">
+                <input id="borderUnifyInput" type="checkbox" checked />
+                <span>统一边缘近似色</span>
+              </label>
+              <label class="field compact-field">
+                <span>色差阈值</span>
+                <input id="borderThresholdInput" type="range" min="4" max="30" value="10" />
+                <output id="borderThresholdValue">10</output>
+              </label>
+            </div>
+
+            <div class="helper-note">
+              当前使用 Mard 221 标准色表参考值，仍需实物或官方资料校验。
+            </div>
+
+            <div class="palette-grid" id="paletteGrid"></div>
+          </section>
+
+          <section class="tool-section" id="tab-replace">
+            <div class="section-head">
+              <h2>缺色替换</h2>
+              <button class="ghost-button small" id="clearReplaceButton" type="button">清空</button>
+            </div>
+            <div class="helper-note">
+              替换是全局规则：图纸中所有原颜色都会换成目标颜色，统计会自动合并。
+            </div>
+            <div class="list-stack" id="replaceList"></div>
+          </section>
+
+          <section class="tool-section" id="tab-stats">
+            <div class="section-head">
+              <h2>统计与导出</h2>
+            </div>
+            <div class="metric-grid" id="summaryMetrics"></div>
+            <div class="button-row wrap">
+              <button class="primary-button" id="exportPngButton" type="button">导出 PNG</button>
+              <button class="secondary-button" id="openPngButton" type="button">打开图片</button>
+              <button class="secondary-button" id="copyStatsButton" type="button">复制统计</button>
+              <button class="secondary-button" id="exportCsvButton" type="button">导出 CSV</button>
+              <button class="secondary-button" id="exportPdfButton" type="button">打印/PDF</button>
+            </div>
+            <div class="stats-table-wrap">
+              <table class="stats-table">
+                <thead>
+                  <tr>
+                    <th>颜色</th>
+                    <th>编号</th>
+                    <th>数量</th>
+                  </tr>
+                </thead>
+                <tbody id="statsBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <div id="printRoot" aria-hidden="true"></div>
+    <script src="./utils/color.js" defer></script>
+    <script src="./utils/palette-mard.js" defer></script>
+    <script src="./utils/pattern.js" defer></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
