@@ -53,6 +53,10 @@ button:disabled {
   opacity: 0.55;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -389,6 +393,61 @@ input[type="file"] {
   flex-direction: column;
 }
 
+.sheet-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 10px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.summary-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.summary-copy strong {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.2;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.summary-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.summary-next {
+  min-width: 82px;
+  min-height: 34px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: var(--primary);
+  font-weight: 700;
+  transition:
+    background-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.summary-next:hover {
+  background: var(--primary-dark);
+}
+
 .step-tabs {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -413,6 +472,11 @@ input[type="file"] {
 .step-tab.active {
   background: var(--primary-soft);
   color: var(--primary-dark);
+}
+
+.step-tab.disabled {
+  color: #9aa6b2;
+  background: #eef2f6;
 }
 
 .tool-section {
@@ -448,6 +512,58 @@ input[type="file"] {
 
 .section-head h3 {
   font-size: 15px;
+}
+
+.section-title-block {
+  min-width: 0;
+}
+
+.section-title-block p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.image-change-action {
+  flex: 0 0 auto;
+}
+
+.start-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.start-actions p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.split-actions,
+.project-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.wide-action {
+  width: 100%;
+}
+
+body:not(.has-image) .image-change-action,
+body:not(.has-image) .step-tabs {
+  display: none;
 }
 
 .segmented {
@@ -930,12 +1046,30 @@ input[type="range"] {
 }
 
 @media (max-width: 720px) {
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg);
+  }
+
+  .app-shell {
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
   .topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: flex-start;
     gap: 8px;
-    padding: 12px;
+    padding: 8px 10px;
+    flex: 0 0 auto;
+    position: relative;
   }
 
   .brand {
@@ -948,8 +1082,12 @@ input[type="range"] {
   }
 
   .brand-mark {
-    width: 34px;
-    height: 34px;
+    width: 30px;
+    height: 30px;
+    background:
+      linear-gradient(90deg, transparent 8px, rgba(255, 255, 255, 0.55) 8px 10px, transparent 10px),
+      linear-gradient(0deg, transparent 8px, rgba(255, 255, 255, 0.55) 8px 10px, transparent 10px),
+      linear-gradient(135deg, #1f7a8c 0 48%, #df6b3b 48% 74%, #f2c14e 74%);
   }
 
   .brand h1 {
@@ -958,51 +1096,370 @@ input[type="range"] {
 
   .brand p {
     max-width: 100%;
+    font-size: 12px;
   }
 
   .top-actions {
-    gap: 6px;
-    justify-content: flex-end;
-  }
-
-  .top-actions .ghost-button,
-  .top-actions .primary-button {
-    min-height: 34px;
-    padding: 0 10px;
+    display: none;
   }
 
   .workspace {
-    padding: 10px;
-    gap: 10px;
+    width: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .preview-panel,
+  .tool-panel {
+    width: 100%;
+    height: auto;
+    box-shadow: none;
+    border-radius: 0;
+  }
+
+  .preview-panel {
+    width: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 10px 10px 0;
+    border-radius: 8px;
   }
 
   .preview-toolbar {
-    align-items: flex-start;
-    flex-direction: column;
+    min-height: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 9px 10px;
+  }
+
+  .preview-meta {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .preview-meta strong {
+    min-width: 0;
+    text-align: right;
   }
 
   .preview-toggles {
-    justify-content: flex-start;
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    justify-content: stretch;
+  }
+
+  .switch {
+    min-width: 0;
+    min-height: 30px;
+    justify-content: center;
+    padding: 0 6px;
+    font-size: 12px;
+  }
+
+  .canvas-wrap {
+    min-height: 0;
+  }
+
+  .empty-import {
+    gap: 10px;
+    padding: 18px;
+  }
+
+  .empty-visual {
+    width: 88px;
+    height: 88px;
+    gap: 6px;
+    padding: 12px;
+  }
+
+  .empty-import h2 {
+    max-width: 100%;
+    font-size: 20px;
+    overflow-wrap: anywhere;
+  }
+
+  .empty-import p {
+    max-width: 280px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .empty-import .primary-button {
+    min-width: 156px;
+  }
+
+  .status-line {
+    min-height: 30px;
+    padding: 7px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pwa-line {
+    min-height: 26px;
+    padding: 6px 10px;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tool-panel {
+    flex: 0 0 min(54vh, 430px);
+    min-height: 300px;
+    max-height: 54vh;
+    display: flex;
+    padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    background: rgba(255, 255, 255, 0.97);
+  }
+
+  body:not(.has-image) .tool-panel {
+    flex-basis: 218px;
+    min-height: 218px;
+    max-height: 240px;
+  }
+
+  .sheet-summary {
+    flex: 0 0 auto;
+    margin: 0 0 8px;
+    padding: 8px 9px;
+  }
+
+  .summary-copy strong {
+    font-size: 14px;
+  }
+
+  .summary-copy span {
+    font-size: 11px;
+  }
+
+  .summary-next {
+    min-width: 76px;
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .step-tabs {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+    margin-bottom: 8px;
+    padding: 0;
+    overflow: visible;
+    border-bottom: 0;
+    background: transparent;
+  }
+
+  .step-tab {
+    min-width: 0;
+    min-height: 34px;
+    padding: 0 3px;
+    border-radius: 8px;
+    color: var(--muted);
+    background: var(--surface-strong);
+    font-size: 12px;
+    line-height: 1.15;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .step-tab.active {
+    color: #ffffff;
+    background: var(--primary);
+    font-weight: 700;
+  }
+
+  .tool-section {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0 0 12px;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .section-head {
+    margin-bottom: 10px;
+  }
+
+  .section-head h2 {
+    font-size: 16px;
+  }
+
+  .section-title-block p {
+    font-size: 12px;
+  }
+
+  .image-change-action {
+    min-height: 34px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .start-actions {
+    gap: 8px;
+  }
+
+  .start-actions .split-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .start-actions p {
+    font-size: 12px;
+  }
+
+  .split-actions {
+    gap: 8px;
+  }
+
+  .project-actions {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .primary-button,
+  .secondary-button,
+  .ghost-button,
+  .danger-button {
+    min-width: 0;
+    min-height: 40px;
+    padding: 0 10px;
+    font-size: 13px;
+    line-height: 1.15;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .button-row.wrap > button,
+  .button-row.wrap > .file-label {
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .segmented {
+    gap: 5px;
+    padding: 4px;
+    margin-bottom: 10px;
+  }
+
+  .segment {
+    min-height: 34px;
+    font-size: 12px;
   }
 
   .field {
     grid-template-columns: 64px minmax(0, 1fr) 42px;
+    gap: 7px;
+    margin-bottom: 10px;
+  }
+
+  .field span,
+  .number-field span {
+    font-size: 12px;
+  }
+
+  .number-field {
+    margin-bottom: 10px;
+  }
+
+  .number-field input,
+  .number-field select {
+    min-height: 38px;
+    font-size: 14px;
   }
 
   .number-grid,
   .metric-grid {
     grid-template-columns: 1fr;
+    gap: 9px;
   }
 
-  .step-tabs {
-    overflow-x: auto;
-    grid-template-columns: repeat(5, minmax(64px, 1fr));
+  .metric-grid {
+    margin: 10px 0;
+  }
+
+  .metric-card {
+    min-height: 62px;
+    padding: 10px;
+  }
+
+  .metric-card strong {
+    font-size: 16px;
+  }
+
+  .helper-note {
+    padding: 9px 10px;
+    font-size: 12px;
+    line-height: 1.45;
+    margin-bottom: 10px;
+  }
+
+  .palette-grid {
+    grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
+    gap: 7px;
+  }
+
+  .palette-chip {
+    min-height: 52px;
+    padding: 7px;
+  }
+
+  .border-current {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .border-current .ghost-button {
+    grid-column: 1 / -1;
+  }
+
+  .border-palette-grid {
+    grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  }
+
+  .replace-main {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+  }
+
+  .replace-main .missing-badge {
+    display: none;
+  }
+
+  .replacement-option {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .distance-badge {
+    display: none;
+  }
+
+  .stats-table th,
+  .stats-table td {
+    padding: 8px;
+    font-size: 12px;
   }
 }
 
 @media (max-width: 360px) {
   .topbar {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    padding: 8px;
   }
 
   .brand p {
@@ -1010,8 +1467,72 @@ input[type="range"] {
   }
 
   .top-actions {
-    width: 100%;
-    justify-content: flex-end;
+    display: none;
+  }
+
+  .top-actions .ghost-button,
+  .top-actions .primary-button {
+    min-height: 30px;
+    padding: 0 7px;
+    font-size: 11px;
+  }
+
+  .brand-mark {
+    width: 28px;
+    height: 28px;
+  }
+
+  .brand h1 {
+    font-size: 15px;
+  }
+
+  .preview-panel {
+    margin: 8px 8px 0;
+  }
+
+  .tool-panel {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .preview-toggles {
+    gap: 4px;
+  }
+
+  .switch {
+    min-height: 28px;
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .step-tabs {
+    gap: 4px;
+  }
+
+  .step-tab {
+    min-height: 32px;
+    font-size: 11px;
+  }
+
+  .summary-next {
+    min-width: 68px;
+    font-size: 11px;
+  }
+
+  .split-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .field {
+    grid-template-columns: 58px minmax(0, 1fr) 36px;
+  }
+
+  .primary-button,
+  .secondary-button,
+  .ghost-button,
+  .danger-button {
+    padding: 0 8px;
+    font-size: 12px;
   }
 }
 

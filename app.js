@@ -103,6 +103,7 @@
     recomputeTimer: null,
     draftTimer: null,
     isRestoringDraft: false,
+    isExporting: false,
     lastExportUrl: "",
     showGrid: true,
     showBoard: true,
@@ -130,6 +131,9 @@
       "loadProjectButton",
       "saveProjectButton",
       "exportPdfButtonTop",
+      "workflowTitle",
+      "workflowMeta",
+      "workflowNextButton",
       "previewModeLabel",
       "previewSizeLabel",
       "gridToggle",
@@ -142,6 +146,15 @@
       "pwaStatus",
       "imageInput",
       "imageInputSecondary",
+      "imageInputStart",
+      "imageSectionNote",
+      "startActions",
+      "imageTools",
+      "loadProjectButtonStart",
+      "restoreDraftButtonStart",
+      "saveProjectButtonPanel",
+      "loadProjectButtonPanel",
+      "restoreDraftButtonPanel",
       "toleranceInput",
       "toleranceValue",
       "brushInput",
@@ -220,9 +233,16 @@
 
     els.imageInput.addEventListener("change", handleImageInput);
     els.imageInputSecondary.addEventListener("change", handleImageInput);
+    els.imageInputStart.addEventListener("change", handleImageInput);
     els.restoreDraftButton.addEventListener("click", restoreDraftFromStorage);
     els.loadProjectButton.addEventListener("click", loadProjectFromDisk);
     els.saveProjectButton.addEventListener("click", saveProjectToDisk);
+    els.workflowNextButton.addEventListener("click", handleWorkflowNext);
+    els.loadProjectButtonStart.addEventListener("click", loadProjectFromDisk);
+    els.restoreDraftButtonStart.addEventListener("click", restoreDraftFromStorage);
+    els.saveProjectButtonPanel.addEventListener("click", saveProjectToDisk);
+    els.loadProjectButtonPanel.addEventListener("click", loadProjectFromDisk);
+    els.restoreDraftButtonPanel.addEventListener("click", restoreDraftFromStorage);
 
     bindRange(els.toleranceInput, els.toleranceValue, (value) => {
       state.tolerance = value;
@@ -491,6 +511,19 @@
   }
 
   function switchTab(tab) {
+    if (!state.sourceCanvas && tab !== "image") {
+      state.activeTab = "image";
+      document.querySelectorAll(".step-tab").forEach((button) => {
+        button.classList.toggle("active", button.dataset.tab === "image");
+      });
+      document.querySelectorAll(".tool-section").forEach((section) => {
+        section.classList.toggle("active", section.id === "tab-image");
+      });
+      setStatus("先导入图片，再调整图纸参数");
+      updateUiState();
+      return;
+    }
+
     state.activeTab = tab;
     document.querySelectorAll(".step-tab").forEach((button) => {
       button.classList.toggle("active", button.dataset.tab === tab);
@@ -503,7 +536,29 @@
     state.transform.scale = 1;
     els.previewCanvas.style.cursor = "";
     setStatus(tabStatusText(tab));
+    updateUiState();
     drawPreview();
+  }
+
+  function handleWorkflowNext() {
+    if (!state.sourceCanvas) {
+      els.imageInputStart.click();
+      return;
+    }
+
+    const nextTabByCurrent = {
+      image: "size",
+      size: "palette",
+      palette: "replace",
+      replace: "stats",
+    };
+    const nextTab = nextTabByCurrent[state.activeTab];
+    if (nextTab) {
+      switchTab(nextTab);
+      return;
+    }
+
+    exportPng();
   }
 
   function handleImageInput(event) {
@@ -1276,6 +1331,7 @@
   function renderAll() {
     els.emptyImport.classList.toggle("hidden", Boolean(state.sourceCanvas));
     renderMetrics();
+    updateUiState();
     renderPaletteGrid();
     renderBorderControls();
     renderReplaceList();
@@ -1315,6 +1371,135 @@
       ["颜色数量", String(state.stats.length)],
       ["预计板数", boardCountX * boardCountY + " 块"],
     ]);
+  }
+
+  function updateUiState() {
+    const hasImage = Boolean(state.sourceCanvas);
+    const hasPattern = state.finalCells.length > 0;
+    const totalBeads = state.stats.reduce((sum, item) => sum + item.count, 0);
+    const workflow = workflowSummary(hasImage, hasPattern, totalBeads);
+
+    els.workflowTitle.textContent = workflow.title;
+    els.workflowMeta.textContent = workflow.meta;
+    els.workflowNextButton.textContent = workflow.nextLabel;
+    els.workflowNextButton.disabled = state.isExporting;
+    els.imageSectionNote.textContent = hasImage ? imageStatusText() : "相册或拍照导入，本地处理图片。";
+    els.startActions.classList.toggle("hidden", hasImage);
+    els.imageTools.classList.toggle("hidden", !hasImage);
+    document.body.classList.toggle("has-image", hasImage);
+    document.body.classList.toggle("has-pattern", hasPattern);
+    document.body.classList.toggle("is-exporting", state.isExporting);
+
+    document.querySelectorAll(".step-tab").forEach((button) => {
+      const disabled = !hasImage && button.dataset.tab !== "image";
+      button.classList.toggle("disabled", disabled);
+      button.disabled = disabled;
+    });
+
+    const needsImageButtons = [
+      els.saveProjectButton,
+      els.saveProjectButtonPanel,
+      els.autoCutoutButton,
+      els.undoMaskButton,
+      els.applyAlphaButton,
+      els.resetMaskButton,
+      els.resetCropButton,
+    ];
+    needsImageButtons.forEach((button) => {
+      button.disabled = !hasImage || state.isExporting;
+    });
+
+    const exportButtons = [
+      els.exportPngButton,
+      els.openPngButton,
+      els.copyStatsButton,
+      els.exportCsvButton,
+      els.exportPdfButton,
+      els.exportPdfButtonTop,
+    ];
+    exportButtons.forEach((button) => {
+      button.disabled = !hasPattern || state.isExporting;
+    });
+    els.exportPngButton.textContent = state.isExporting ? "正在导出" : "保存图纸 PNG";
+    els.openPngButton.textContent = state.isExporting ? "正在生成图片" : "打开图片";
+    els.copyStatsButton.textContent = "复制统计清单";
+    els.exportCsvButton.textContent = "导出 CSV";
+    els.exportPdfButton.textContent = "打印/PDF";
+
+    if (!hasImage && state.activeTab !== "image") {
+      switchTab("image");
+    }
+  }
+
+  function workflowSummary(hasImage, hasPattern, totalBeads) {
+    if (state.isExporting) {
+      return {
+        title: "正在导出",
+        meta: "正在生成图纸图片，请稍候",
+        nextLabel: "处理中",
+      };
+    }
+    if (!hasImage) {
+      return {
+        title: "准备导入图片",
+        meta: "先选择一张图片",
+        nextLabel: "导入图片",
+      };
+    }
+    if (!hasPattern) {
+      return {
+        title: "图片已导入",
+        meta: imageStatusText(),
+        nextLabel: "调尺寸",
+      };
+    }
+    if (state.activeTab === "stats") {
+      return {
+        title: "图纸已生成",
+        meta:
+          state.beadWidth +
+          " x " +
+          state.beadHeight +
+          " / " +
+          formatNumber(totalBeads) +
+          "颗 / " +
+          state.stats.length +
+          "色",
+        nextLabel: "保存 PNG",
+      };
+    }
+    const nextLabels = {
+      image: "调尺寸",
+      size: "调色表",
+      palette: "缺色替换",
+      replace: "看统计",
+    };
+    return {
+      title: "图纸已生成",
+      meta:
+        state.beadWidth +
+        " x " +
+        state.beadHeight +
+        " / " +
+        formatNumber(totalBeads) +
+        "颗 / " +
+        state.stats.length +
+        "色",
+      nextLabel: nextLabels[state.activeTab] || "看统计",
+    };
+  }
+
+  function imageStatusText() {
+    if (!state.sourceCanvas) {
+      return "先选择一张图片";
+    }
+    const bounds = cropBounds();
+    const full = bounds.x <= 0 && bounds.y <= 0 && bounds.width >= state.sourceCanvas.width && bounds.height >= state.sourceCanvas.height;
+    const cropText = full
+      ? "当前：整张图片 " + state.sourceCanvas.width + " x " + state.sourceCanvas.height
+      : "当前：已裁剪 " + bounds.width + " x " + bounds.height;
+    const maskEdited = state.maskHistory.length > 0;
+    return maskEdited ? cropText + " / 已处理背景" : cropText;
   }
 
   function renderMetricCards(container, items) {
@@ -2390,16 +2575,18 @@
       setStatus("请先生成图纸");
       return;
     }
+    setExporting(true, "正在导出 PNG 图纸");
     const canvas = createPatternExportCanvas();
     canvas.toBlob((blob) => {
       if (!blob) {
         downloadUrl(canvas.toDataURL("image/png"), safeName(state.imageName || "pattern") + ".png");
+        setExporting(false, "已导出 PNG 图纸，底部已包含颜色统计清单");
         return;
       }
       const url = URL.createObjectURL(blob);
       downloadUrl(url, safeName(state.imageName || "pattern") + ".png");
+      setExporting(false, "已导出 PNG 图纸，底部已包含颜色统计清单");
     }, "image/png");
-    setStatus("已导出 PNG 图纸，底部已包含颜色统计清单");
   }
 
   function openPngPreview() {
@@ -2408,6 +2595,7 @@
       return;
     }
     const previewWindow = window.open("", "_blank");
+    setExporting(true, "正在生成可打开的图片");
     const canvas = createPatternExportCanvas();
     canvas.toBlob((blob) => {
       if (!blob) {
@@ -2417,6 +2605,7 @@
         } else {
           window.location.href = dataUrl;
         }
+        setExporting(false, "已打开图片预览；iPhone 可长按图片保存或分享");
         return;
       }
       if (state.lastExportUrl) {
@@ -2428,7 +2617,7 @@
       } else {
         downloadUrl(state.lastExportUrl, safeName(state.imageName || "pattern") + ".png");
       }
-      setStatus("已打开图片预览；iPhone 可长按图片保存或分享");
+      setExporting(false, "已打开图片预览；iPhone 可长按图片保存或分享");
     }, "image/png");
   }
 
@@ -2452,6 +2641,7 @@
       setStatus("请先生成图纸");
       return;
     }
+    setExporting(true, "正在准备打印/PDF");
     const canvas = createPatternExportCanvas();
     const totalBeads = state.stats.reduce((sum, item) => sum + item.count, 0);
     const boardX = Math.ceil(state.beadWidth / state.boardWidth);
@@ -2496,7 +2686,15 @@
       "</tbody></table></section>";
 
     window.print();
-    setStatus("已打开系统打印，可选择另存为 PDF");
+    setExporting(false, "已打开系统打印，可选择另存为 PDF");
+  }
+
+  function setExporting(value, statusText) {
+    state.isExporting = Boolean(value);
+    if (statusText) {
+      setStatus(statusText);
+    }
+    updateUiState();
   }
 
   function createPatternExportCanvas() {
@@ -2838,12 +3036,20 @@
     }
     try {
       const payload = await readDraftPayload();
-      els.restoreDraftButton.disabled = !payload;
-      els.restoreDraftButton.title = payload && payload.savedAt ? "上次草稿：" + payload.savedAt : "暂无本机草稿";
+      setDraftButtonsState(Boolean(payload), payload && payload.savedAt ? "上次草稿：" + payload.savedAt : "暂无本机草稿");
     } catch (error) {
-      els.restoreDraftButton.disabled = true;
-      els.restoreDraftButton.title = "当前浏览器无法读取草稿";
+      setDraftButtonsState(false, "当前浏览器无法读取草稿");
     }
+  }
+
+  function setDraftButtonsState(hasDraft, title) {
+    [els.restoreDraftButton, els.restoreDraftButtonStart, els.restoreDraftButtonPanel].forEach((button) => {
+      if (!button) {
+        return;
+      }
+      button.disabled = !hasDraft;
+      button.title = title;
+    });
   }
 
   function openDraftDb() {

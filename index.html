@@ -30,7 +30,7 @@
           <button class="ghost-button" id="restoreDraftButton" type="button">草稿</button>
           <button class="ghost-button" id="loadProjectButton" type="button">载入</button>
           <button class="ghost-button" id="saveProjectButton" type="button">保存</button>
-          <button class="primary-button" id="exportPdfButtonTop" type="button">导出</button>
+          <button class="primary-button" id="exportPdfButtonTop" type="button">PDF</button>
         </div>
       </header>
 
@@ -77,6 +77,14 @@
         </section>
 
         <aside class="tool-panel" aria-label="编辑工具">
+          <div class="sheet-summary" aria-live="polite">
+            <div class="summary-copy">
+              <strong id="workflowTitle">准备导入图片</strong>
+              <span id="workflowMeta">先选择一张图片</span>
+            </div>
+            <button class="summary-next" id="workflowNextButton" type="button">导入图片</button>
+          </div>
+
           <nav class="step-tabs" aria-label="编辑步骤">
             <button class="step-tab active" data-tab="image" type="button">图片</button>
             <button class="step-tab" data-tab="size" type="button">尺寸</button>
@@ -87,77 +95,100 @@
 
           <section class="tool-section active" id="tab-image">
             <div class="section-head">
-              <h2>导入与扣图</h2>
-              <label class="secondary-button file-label">
-                换图
+              <div class="section-title-block">
+                <h2>图片</h2>
+                <p id="imageSectionNote">相册或拍照导入，本地处理图片。</p>
+              </div>
+              <label class="secondary-button file-label image-change-action">
+                更换图片
                 <input id="imageInputSecondary" type="file" accept="image/*" />
               </label>
             </div>
 
-            <div class="segmented" role="group" aria-label="扣图工具">
-              <button class="segment active" data-tool="view" type="button">查看</button>
-              <button class="segment" data-tool="magic" type="button">魔棒</button>
-              <button class="segment" data-tool="erase" type="button">橡皮</button>
-              <button class="segment" data-tool="restore" type="button">恢复</button>
+            <div class="start-actions" id="startActions">
+              <div class="split-actions">
+                <label class="primary-button file-label">
+                  导入图片
+                  <input id="imageInputStart" type="file" accept="image/*" />
+                </label>
+                <button class="secondary-button" id="loadProjectButtonStart" type="button">载入项目</button>
+              </div>
+              <button class="secondary-button wide-action" id="restoreDraftButtonStart" type="button">载入草稿</button>
+              <p>支持相册或拍照，本地处理，不上传。</p>
             </div>
 
-            <label class="field">
-              <span>魔棒容差</span>
-              <input id="toleranceInput" type="range" min="0" max="160" value="42" />
-              <output id="toleranceValue">42</output>
-            </label>
+            <div class="image-tools hidden" id="imageTools">
+              <div class="segmented" role="group" aria-label="扣图工具">
+                <button class="segment active" data-tool="view" type="button">查看</button>
+                <button class="segment" data-tool="magic" type="button">魔棒</button>
+                <button class="segment" data-tool="erase" type="button">橡皮</button>
+                <button class="segment" data-tool="restore" type="button">恢复</button>
+              </div>
 
-            <label class="field">
-              <span>笔刷大小</span>
-              <input id="brushInput" type="range" min="4" max="80" value="24" />
-              <output id="brushValue">24</output>
-            </label>
+              <label class="field">
+                <span>背景容差</span>
+                <input id="toleranceInput" type="range" min="0" max="160" value="42" />
+                <output id="toleranceValue">42</output>
+              </label>
 
-            <label class="field">
-              <span>透明阈值</span>
-              <input id="alphaInput" type="range" min="0" max="255" value="20" />
-              <output id="alphaValue">20</output>
-            </label>
+              <label class="field">
+                <span>笔刷大小</span>
+                <input id="brushInput" type="range" min="4" max="80" value="24" />
+                <output id="brushValue">24</output>
+              </label>
 
-            <label class="field">
-              <span>对比度</span>
-              <input id="contrastInput" type="range" min="-50" max="100" value="0" />
-              <output id="contrastValue">0</output>
-            </label>
+              <label class="field">
+                <span>透明阈值</span>
+                <input id="alphaInput" type="range" min="0" max="255" value="20" />
+                <output id="alphaValue">20</output>
+              </label>
 
-            <label class="field">
-              <span>饱和度</span>
-              <input id="saturationInput" type="range" min="-50" max="100" value="0" />
-              <output id="saturationValue">0</output>
-            </label>
+              <label class="field">
+                <span>对比度</span>
+                <input id="contrastInput" type="range" min="-50" max="100" value="0" />
+                <output id="contrastValue">0</output>
+              </label>
 
-            <div class="button-row wrap">
-              <button class="secondary-button" id="autoCutoutButton" type="button">一键去背景</button>
-              <button class="ghost-button" id="undoMaskButton" type="button">撤销扣图</button>
-              <button class="ghost-button" id="applyAlphaButton" type="button">应用透明阈值</button>
-              <button class="danger-button" id="resetMaskButton" type="button">重置蒙版</button>
-            </div>
+              <label class="field">
+                <span>饱和度</span>
+                <input id="saturationInput" type="range" min="-50" max="100" value="0" />
+                <output id="saturationValue">0</output>
+              </label>
 
-            <div class="divider"></div>
+              <div class="button-row wrap">
+                <button class="secondary-button" id="autoCutoutButton" type="button">一键去背景</button>
+                <button class="ghost-button" id="undoMaskButton" type="button">撤销扣图</button>
+                <button class="ghost-button" id="applyAlphaButton" type="button">应用透明阈值</button>
+                <button class="danger-button" id="resetMaskButton" type="button">重置背景</button>
+              </div>
 
-            <div class="section-head compact">
-              <h3>裁剪</h3>
-              <button class="ghost-button small" id="resetCropButton" type="button">重置</button>
-            </div>
-            <label class="number-field full">
-              <span>裁剪比例</span>
-              <select id="cropAspectSelect">
-                <option value="free" selected>自由</option>
-                <option value="original">原图比例</option>
-                <option value="1:1">1:1</option>
-                <option value="4:3">4:3</option>
-                <option value="3:4">3:4</option>
-                <option value="16:9">16:9</option>
-                <option value="9:16">9:16</option>
-              </select>
-            </label>
-            <div class="helper-note compact-note">
-              在图片预览中拖动裁剪框，拖边缘或角点可调整范围。
+              <div class="divider"></div>
+
+              <div class="section-head compact">
+                <h3>裁剪图片</h3>
+                <button class="ghost-button small" id="resetCropButton" type="button">重置</button>
+              </div>
+              <label class="number-field full">
+                <span>裁剪比例</span>
+                <select id="cropAspectSelect">
+                  <option value="free" selected>自由</option>
+                  <option value="original">原图比例</option>
+                  <option value="1:1">1:1</option>
+                  <option value="4:3">4:3</option>
+                  <option value="3:4">3:4</option>
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                </select>
+              </label>
+              <div class="helper-note compact-note">
+                在图片预览中拖动裁剪框，拖边缘或角点可调整范围。
+              </div>
+
+              <div class="project-actions">
+                <button class="secondary-button" id="saveProjectButtonPanel" type="button">保存项目</button>
+                <button class="secondary-button" id="loadProjectButtonPanel" type="button">载入项目</button>
+                <button class="secondary-button" id="restoreDraftButtonPanel" type="button">载入草稿</button>
+              </div>
             </div>
           </section>
 
