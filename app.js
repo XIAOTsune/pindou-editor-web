@@ -1,8 +1,23 @@
 (function () {
   "use strict";
 
-  const maxWorkingSide = 1400;
+  const maxWorkingSide = 960;
   const beadLimit = 300;
+  const previewPadding = 18;
+  const minPreviewScale = 1;
+  const maxPreviewScale = 60;
+  const minPreviewButtonScale = 5;
+  const previewCodeCellSize = 16;
+  const maxPatternCachePixels = 9000000;
+  const maxPatternCacheSide = 4096;
+  const exportMaxPatternSide = 7200;
+  const exportMinStatsWidth = 1080;
+  const exportStatsPadding = 36;
+  const exportStatsHeaderHeight = 78;
+  const exportStatsRowHeight = 34;
+  const exportStatsColumnMinWidth = 300;
+  const cropHandleRadius = 28;
+  const minCropSide = 8;
   const draftDbName = "pindou-editor-web";
   const draftStoreName = "drafts";
   const draftKey = "autosave";
@@ -21,36 +36,42 @@
     throw new Error("Pindou modules are not loaded in the expected order.");
   }
 
-  const { colorDistance, hexToRgb, labDistance, nearestColor, rgbToLab } = colorTools;
+  const { colorDistance, hexToRgb, labDistance, rgbToLab } = colorTools;
   const {
-    applyBorderCells,
-    applyReplacements,
     computeStats: computePaletteStats,
     defaultBorderConfig,
+    generatePattern,
     normalizeBorderConfig,
+    palette: enginePalette,
     pickDominantEdgeColor,
   } = patternTools;
   const mardPaletteData = paletteData.mardPaletteData;
-  const palette = mardPaletteData.map((item) => {
-    const rgb = hexToRgb(item[2]);
-    return {
-      id: "mard_" + item[0].toLowerCase(),
-      brand: "Mard",
-      code: item[0],
-      name: item[1],
-      hex: item[2],
-      rgb,
-      lab: rgbToLab(rgb.r, rgb.g, rgb.b),
-    };
-  });
+  const palette =
+    Array.isArray(enginePalette) && enginePalette.length
+      ? enginePalette
+      : mardPaletteData.map((item) => {
+          const rgb = hexToRgb(item[2]);
+          return {
+            id: "mard_" + item[0].toLowerCase(),
+            brand: "Mard",
+            code: item[0],
+            name: item[1],
+            hex: item[2],
+            rgb,
+            lab: rgbToLab(rgb.r, rgb.g, rgb.b),
+          };
+        });
 
   const paletteById = new Map(palette.map((color) => [color.id, color]));
 
   const state = {
     activeTab: "image",
     activeTool: "view",
+    originalCanvas: null,
+    originalSourceImageData: null,
     sourceCanvas: null,
     sourceImageData: null,
+    cutoutBaseImageData: null,
     mask: null,
     maskHistory: [],
     maskVersion: 0,
@@ -63,6 +84,11 @@
       top: 0,
       bottom: 1,
     },
+    cropDraft: null,
+    cropApplied: false,
+    appliedCropRect: null,
+    cutoutApplied: false,
+    isCropping: false,
     beadWidth: 48,
     beadHeight: 48,
     lockAspect: true,
@@ -91,6 +117,13 @@
     rawCells: [],
     borderedCells: [],
     finalCells: [],
+    pattern: null,
+    patternVersion: 0,
+    patternCacheCanvas: null,
+    patternCacheCtx: null,
+    patternCacheDirty: true,
+    patternCacheCellSize: 0,
+    patternCacheSignature: "",
     stats: [],
     transform: {
       scale: 1,
@@ -100,9 +133,11 @@
     interaction: null,
     activePointers: new Map(),
     contentRect: null,
+    isPreviewInteracting: false,
     recomputeTimer: null,
     draftTimer: null,
     isRestoringDraft: false,
+    isProcessing: false,
     isExporting: false,
     lastExportUrl: "",
     showGrid: true,
@@ -178,6 +213,10 @@
       "resetMaskButton",
       "resetCropButton",
       "cropFocusButton",
+      "cropModeActions",
+      "applyCropButton",
+      "cancelCropButton",
+      "resetCropDraftButton",
       "cropAspectSelect",
       "beadWidthInput",
       "beadHeightInput",
@@ -300,6 +339,9 @@
     els.resetMaskButton.addEventListener("click", resetMask);
     els.resetCropButton.addEventListener("click", resetCrop);
     els.cropFocusButton.addEventListener("click", focusCropTools);
+    els.applyCropButton.addEventListener("click", applyCrop);
+    els.cancelCropButton.addEventListener("click", cancelCrop);
+    els.resetCropDraftButton.addEventListener("click", resetCropDraft);
     els.cropAspectSelect.addEventListener("change", () => {
       state.cropAspect = els.cropAspectSelect.value;
       applyCropAspect();
@@ -548,6 +590,12 @@
   }
 
   function switchTab(tab) {
+    if (state.isCropping && tab !== "image") {
+      setStatus("请先应用或取消裁剪");
+      updateUiState();
+      return;
+    }
+
     if (!state.sourceCanvas && tab !== "image") {
       state.activeTab = "image";
       document.querySelectorAll(".step-tab").forEach((button) => {
@@ -580,6 +628,11 @@
   function handleWorkflowNext() {
     if (!state.sourceCanvas) {
       els.imageInputStart.click();
+      return;
+    }
+
+    if (state.isCropping) {
+      applyCrop();
       return;
     }
 
@@ -635,8 +688,11 @@
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx.drawImage(image, 0, 0, width, height);
 
+    const imageData = ctx.getImageData(0, 0, width, height);
+    state.originalCanvas = canvas;
+    state.originalSourceImageData = imageData;
     state.sourceCanvas = canvas;
-    state.sourceImageData = ctx.getImageData(0, 0, width, height);
+    state.sourceImageData = imageData;
     state.imageName = name;
     state.mask = new Uint8ClampedArray(width * height);
     initializeMaskFromAlpha();
@@ -644,17 +700,23 @@
     state.maskVersion += 1;
     state.maskedCanvas = null;
     state.crop = { left: 0, right: 1, top: 0, bottom: 1 };
+    state.cropDraft = null;
+    state.cropApplied = false;
+    state.appliedCropRect = createFullCropRect(width, height);
+    state.cutoutApplied = false;
+    state.cutoutBaseImageData = null;
+    state.isCropping = false;
     state.replacementMap.clear();
     state.replaceExpanded.clear();
     state.replaceShowAll.clear();
     state.disabledColors.clear();
     state.transform = { scale: 1, offsetX: 0, offsetY: 0 };
+    state.pattern = null;
+    state.patternCacheDirty = true;
+    state.patternCacheSignature = "";
 
-    if (state.cropAspect !== "free") {
-      applyCropAspect(false);
-    }
     if (state.lockAspect) {
-      const aspect = cropPixelHeight() / cropPixelWidth();
+      const aspect = sourceAspect();
       state.beadHeight = clampInt(Math.round(state.beadWidth * aspect), 8, beadLimit);
     }
     syncBeadSizeInputs(true);
@@ -689,36 +751,24 @@
   }
 
   function autoCutoutBackground() {
-    if (!state.sourceImageData || !state.mask) {
+    if (!state.sourceImageData) {
       setStatus("请先导入图片");
       return;
     }
 
-    pushMaskHistory();
-    const width = state.sourceImageData.width;
-    const height = state.sourceImageData.height;
-    const inset = Math.max(0, Math.floor(Math.min(width, height) * 0.025));
-    const seeds = uniqueSeeds([
-      [inset, inset],
-      [width - 1 - inset, inset],
-      [inset, height - 1 - inset],
-      [width - 1 - inset, height - 1 - inset],
-      [Math.floor(width / 2), inset],
-      [Math.floor(width / 2), height - 1 - inset],
-      [inset, Math.floor(height / 2)],
-      [width - 1 - inset, Math.floor(height / 2)],
-    ], width, height);
+    const baseImageData = state.cutoutApplied ? currentCropImageData() : state.sourceImageData;
+    const result = removeEdgeBackground(baseImageData, state.tolerance, state.alphaThreshold);
+    if (!result || !result.changed) {
+      setStatus("没有识别到背景");
+      return;
+    }
 
-    const tolerance = Math.max(state.tolerance, 54);
-    let changed = 0;
-    seeds.forEach((seed) => {
-      changed += floodRemoveFromSeed(seed.x, seed.y, tolerance);
-    });
-
-    state.maskVersion += 1;
+    state.cutoutBaseImageData = baseImageData;
+    setCurrentImageData(result.imageData);
+    state.cutoutApplied = true;
     recomputePattern();
     renderAll();
-    setStatus("一键去背景删除了 " + formatNumber(changed) + " 个像素");
+    setStatus("已去背景 " + formatNumber(result.changed) + " 像素");
   }
 
   function undoMaskEdit() {
@@ -734,36 +784,136 @@
   }
 
   function resetMask() {
-    if (!state.sourceImageData) {
+    if (!state.sourceImageData || !state.originalSourceImageData) {
       setStatus("请先导入图片");
       return;
     }
-    pushMaskHistory();
-    state.mask.fill(255);
-    state.maskVersion += 1;
+
+    if (state.cutoutApplied) {
+      const restored = currentCropImageData();
+      if (!restored) {
+        setStatus("无法重置背景");
+        return;
+      }
+      setCurrentImageData(restored);
+      state.cutoutApplied = false;
+      state.cutoutBaseImageData = null;
+    } else if (state.mask) {
+      state.mask.fill(255);
+      state.maskVersion += 1;
+      state.maskedCanvas = null;
+    }
     recomputePattern();
     renderAll();
-    setStatus("已重置扣图蒙版");
+    setStatus("已重置背景");
   }
 
   function resetCrop() {
-    state.crop = { left: 0, right: 1, top: 0, bottom: 1 };
-    applyCropAspect();
-    setStatus("裁剪范围已重置");
+    resetCropToFull();
   }
 
   function focusCropTools() {
-    if (!state.sourceCanvas) {
+    if (!state.originalSourceImageData) {
       setStatus("请先导入图片");
       return;
     }
+    const full = createFullCropRect(state.originalSourceImageData.width, state.originalSourceImageData.height);
+    state.cropDraft = normalizeCropRect(state.appliedCropRect || full, full.width, full.height);
+    state.crop = cropToNormalized(state.cropDraft, full.width, full.height);
+    state.isCropping = true;
+    state.activeTab = "image";
     state.activeTool = "view";
+    document.querySelectorAll(".step-tab").forEach((button) => {
+      button.classList.toggle("active", button.dataset.tab === "image");
+    });
+    document.querySelectorAll(".tool-section").forEach((section) => {
+      section.classList.toggle("active", section.id === "tab-image");
+    });
     document.querySelectorAll(".segment[data-tool]").forEach((button) => {
       button.classList.toggle("active", button.dataset.tool === "view");
     });
     els.canvasWrap.scrollIntoView({ block: "nearest" });
+    updateUiState();
     drawPreview();
-    setStatus("拖动裁剪框，拖边缘或角点可调整范围");
+    setStatus("拖动裁剪框，应用后重新生成图纸");
+  }
+
+  function cancelCrop() {
+    state.isCropping = false;
+    state.cropDraft = null;
+    state.crop = { left: 0, right: 1, top: 0, bottom: 1 };
+    state.interaction = null;
+    updateUiState();
+    drawPreview();
+    setStatus(state.finalCells.length ? "已返回图纸预览" : "已取消裁剪");
+  }
+
+  function resetCropDraft() {
+    if (!state.originalSourceImageData) {
+      return;
+    }
+    const full = createFullCropRect(state.originalSourceImageData.width, state.originalSourceImageData.height);
+    state.cropDraft = full;
+    state.crop = cropToNormalized(full, full.width, full.height);
+    drawPreview();
+    setStatus("裁剪范围已重置");
+  }
+
+  function applyCrop() {
+    if (!state.originalSourceImageData) {
+      setStatus("请先导入图片");
+      return;
+    }
+    const full = createFullCropRect(state.originalSourceImageData.width, state.originalSourceImageData.height);
+    const rect = normalizeCropRect(state.cropDraft || cropBounds(), full.width, full.height);
+    const cropped = cropImageData(state.originalSourceImageData, rect);
+    if (!cropped || !cropped.data || !cropped.width || !cropped.height) {
+      setStatus("裁剪区域太小");
+      return;
+    }
+
+    state.appliedCropRect = rect;
+    state.cropApplied = !isFullCropRect(rect, full.width, full.height);
+    state.cropDraft = null;
+    state.crop = { left: 0, right: 1, top: 0, bottom: 1 };
+    state.isCropping = false;
+    state.cutoutApplied = false;
+    state.cutoutBaseImageData = null;
+    state.transform = { scale: 1, offsetX: 0, offsetY: 0 };
+    setCurrentImageData(cropped);
+    if (state.lockAspect) {
+      const aspect = sourceAspect();
+      state.beadHeight = clampInt(Math.round(state.beadWidth * aspect), 8, beadLimit);
+      syncBeadSizeInputs(true);
+    }
+    recomputePattern();
+    renderAll();
+    setStatus(state.cropApplied ? "已应用裁剪" : "已恢复整图");
+  }
+
+  function resetCropToFull() {
+    if (!state.originalSourceImageData) {
+      setStatus("请先导入图片");
+      return;
+    }
+    const full = createFullCropRect(state.originalSourceImageData.width, state.originalSourceImageData.height);
+    state.appliedCropRect = full;
+    state.cropApplied = false;
+    state.cropDraft = null;
+    state.crop = { left: 0, right: 1, top: 0, bottom: 1 };
+    state.isCropping = false;
+    state.cutoutApplied = false;
+    state.cutoutBaseImageData = null;
+    state.transform = { scale: 1, offsetX: 0, offsetY: 0 };
+    setCurrentImageData(state.originalSourceImageData);
+    if (state.lockAspect) {
+      const aspect = sourceAspect();
+      state.beadHeight = clampInt(Math.round(state.beadWidth * aspect), 8, beadLimit);
+      syncBeadSizeInputs(true);
+    }
+    recomputePattern();
+    renderAll();
+    setStatus("已恢复整图");
   }
 
   function resetAdjustment(field) {
@@ -898,7 +1048,8 @@
   }
 
   function applyCropAspect(recompute) {
-    if (!state.sourceCanvas) {
+    const size = cropCoordinateSize();
+    if (!size.width || !size.height) {
       syncCropControls();
       return;
     }
@@ -929,7 +1080,8 @@
       return null;
     }
     if (state.cropAspect === "original") {
-      return state.sourceCanvas ? state.sourceCanvas.width / state.sourceCanvas.height : null;
+      const size = cropCoordinateSize();
+      return size.width && size.height ? size.width / size.height : null;
     }
     const parts = state.cropAspect.split(":").map(Number);
     if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) {
@@ -939,7 +1091,7 @@
   }
 
   function fitCropRect(centerX, centerY, width, height, aspect) {
-    const source = state.sourceCanvas;
+    const source = cropCoordinateSize();
     const minSize = cropMinSize();
     let nextWidth = Math.max(minSize, width);
     let nextHeight = Math.max(minSize, height);
@@ -973,15 +1125,16 @@
   }
 
   function cropMinSize() {
-    if (!state.sourceCanvas) {
+    const source = cropCoordinateSize();
+    if (!source.width || !source.height) {
       return 1;
     }
-    return Math.max(8, Math.min(state.sourceCanvas.width, state.sourceCanvas.height) * 0.05);
+    return minCropSide;
   }
 
   function setCropFromPixelRect(rect) {
-    const source = state.sourceCanvas;
-    if (!source) {
+    const source = cropCoordinateSize();
+    if (!source.width || !source.height) {
       return;
     }
     const minSize = cropMinSize();
@@ -995,9 +1148,17 @@
       top: y / source.height,
       bottom: (y + height) / source.height,
     });
+    if (state.isCropping) {
+      state.cropDraft = { x, y, width, height };
+    }
   }
 
   function handleCropChanged(recompute) {
+    if (state.isCropping) {
+      drawPreview();
+      return;
+    }
+
     if (state.lockAspect && state.sourceCanvas) {
       const aspect = cropPixelHeight() / cropPixelWidth();
       state.beadHeight = clampInt(Math.round(state.beadWidth * aspect), 8, beadLimit);
@@ -1034,7 +1195,7 @@
   }
 
   function resizeFreeCrop(rect, handle, point) {
-    const source = state.sourceCanvas;
+    const source = cropCoordinateSize();
     const minSize = cropMinSize();
     let left = rect.x;
     let top = rect.y;
@@ -1070,7 +1231,7 @@
   }
 
   function resizeFixedCorner(rect, handle, point, aspect) {
-    const source = state.sourceCanvas;
+    const source = cropCoordinateSize();
     const minSize = cropMinSize();
     const sx = handle.includes("e") ? 1 : -1;
     const sy = handle.includes("s") ? 1 : -1;
@@ -1107,7 +1268,7 @@
   }
 
   function resizeFixedEdge(rect, handle, point, aspect) {
-    const source = state.sourceCanvas;
+    const source = cropCoordinateSize();
     const minSize = cropMinSize();
     const centerX = rect.x + rect.width / 2;
     const centerY = rect.y + rect.height / 2;
@@ -1160,59 +1321,94 @@
 
   function recomputePattern() {
     if (!state.sourceCanvas || !state.sourceImageData) {
+      state.pattern = null;
       state.pixelSamples = [];
       state.rawCells = [];
       state.borderedCells = [];
       state.finalCells = [];
       state.stats = [];
+      state.patternCacheDirty = true;
       renderMetrics();
       return;
     }
 
-    const started = performance.now();
-    const samples = samplePixels();
-    state.pixelSamples = samples;
-    const enabled = palette.filter((color) => !state.disabledColors.has(color.id));
-
-    if (enabled.length === 0) {
-      state.rawCells = samples.map(() => null);
-      state.borderedCells = state.rawCells.slice();
-      state.finalCells = state.borderedCells.slice();
+    const imageData = makePatternSourceImageData();
+    if (!imageData) {
+      state.pattern = null;
+      state.pixelSamples = [];
+      state.rawCells = [];
+      state.borderedCells = [];
+      state.finalCells = [];
       state.stats = [];
-      setStatus("当前没有可用颜色，请至少启用一种色表颜色");
-      scheduleDraftSave();
+      state.patternCacheDirty = true;
+      renderMetrics();
+      setStatus("生成失败，请重新导入图片");
       return;
     }
 
-    const firstPass = samples.map((sample) => {
-      if (!sample) {
-        return null;
-      }
-      return nearestColor(sample, enabled).id;
+    state.isProcessing = true;
+    setStatus("正在生成图纸");
+    const result = generatePattern({
+      alphaThreshold: state.alphaThreshold,
+      beadHeight: state.beadHeight,
+      beadWidth: state.beadWidth,
+      border: state.border,
+      contrast: state.contrast,
+      coverageThreshold: state.coverageThreshold,
+      dither: state.dither,
+      disabledColorIds: Array.from(state.disabledColors),
+      edgeBoost: state.edgeBoost,
+      imageData,
+      maxColors: state.maxColors,
+      replacements: state.replacementMap,
+      saturation: state.saturation,
+      samplingMode: state.samplingMode,
     });
 
-    const limit = clampInt(state.maxColors, 2, enabled.length);
-    const selectedIds = chooseTopColors(firstPass, limit);
-    let candidates = enabled.filter((color) => selectedIds.has(color.id));
-    if (candidates.length === 0) {
-      candidates = enabled;
-    }
-
-    state.rawCells = samples.map((sample) => {
-      if (!sample) {
-        return null;
-      }
-      return nearestColor(sample, candidates).id;
-    });
-
-    state.borderedCells = applyBorderCells(state.rawCells, state.beadWidth, state.beadHeight, state.border, paletteById, {
-      labDistance,
-    });
-    state.finalCells = applyReplacements(state.borderedCells, state.replacementMap);
-
-    state.stats = computeStats(state.finalCells);
-    setStatus("已生成图纸，用时 " + Math.round(performance.now() - started) + "ms");
+    state.pattern = result;
+    state.pixelSamples = [];
+    state.rawCells = result.rawCells || [];
+    state.borderedCells = result.baseCells || result.rawCells || [];
+    state.finalCells = result.cells || [];
+    state.stats = result.stats || [];
+    state.patternVersion += 1;
+    state.patternCacheDirty = true;
+    state.patternCacheSignature = "";
+    state.isProcessing = false;
+    setStatus("已生成图纸，用时 " + Math.round(result.elapsedMs || 0) + "ms");
     scheduleDraftSave();
+  }
+
+  function makePatternSourceImageData() {
+    if (!state.sourceImageData) {
+      return null;
+    }
+    const cropped = cropImageData(state.sourceImageData, cropBounds());
+    if (!cropped) {
+      return null;
+    }
+    return applyMaskToCroppedImageData(cropped, cropBounds());
+  }
+
+  function applyMaskToCroppedImageData(imageData, crop) {
+    if (!state.mask || !state.sourceImageData || state.mask.length !== state.sourceImageData.width * state.sourceImageData.height) {
+      return imageData;
+    }
+    const data = new Uint8ClampedArray(imageData.data);
+    for (let y = 0; y < imageData.height; y += 1) {
+      for (let x = 0; x < imageData.width; x += 1) {
+        const sourceX = crop.x + x;
+        const sourceY = crop.y + y;
+        const sourceIndex = sourceY * state.sourceImageData.width + sourceX;
+        const targetAlphaIndex = (y * imageData.width + x) * 4 + 3;
+        data[targetAlphaIndex] = Math.round((data[targetAlphaIndex] * (state.mask[sourceIndex] || 0)) / 255);
+      }
+    }
+    return {
+      data,
+      width: imageData.width,
+      height: imageData.height,
+    };
   }
 
   function samplePixels() {
@@ -1460,7 +1656,7 @@
     els.previewSizeLabel.textContent = state.sourceCanvas
       ? state.beadWidth + " x " + state.beadHeight + " · " + totalBeads + " 颗"
       : "未导入";
-    els.previewModeLabel.textContent = state.activeTab === "image" ? "图片预览" : "图纸预览";
+    els.previewModeLabel.textContent = state.isCropping ? "裁剪预览" : state.finalCells.length ? "图纸预览" : "图片预览";
 
     renderMetricCards(els.sizeMetrics, [
       ["总格数", formatNumber(totalCells)],
@@ -1487,6 +1683,7 @@
     els.workflowMeta.textContent = workflow.meta;
     els.workflowNextButton.textContent = workflow.nextLabel;
     els.workflowNextButton.disabled = state.isExporting;
+    els.previewModeLabel.textContent = state.isCropping ? "裁剪预览" : hasPattern ? "图纸预览" : "图片预览";
     els.imageSectionNote.textContent = hasImage ? imageStatusText() : "相册或拍照导入，本地处理图片。";
     if (els.imageNotice) {
       els.imageNotice.textContent = imageStatusText();
@@ -1497,13 +1694,18 @@
     document.body.classList.toggle("has-pattern", hasPattern);
     document.body.classList.toggle("is-exporting", state.isExporting);
     document.body.classList.toggle("is-image-tab", state.activeTab === "image");
+    document.body.classList.toggle("is-cropping", state.isCropping);
+    document.body.classList.toggle("can-zoom-preview", hasPattern && !state.isCropping);
+    if (els.cropModeActions) {
+      els.cropModeActions.classList.toggle("hidden", !state.isCropping);
+    }
     syncPreviewOptionChips();
     syncTogglePills();
     syncOptionSegments();
     updateZoomControls();
 
     document.querySelectorAll(".step-tab").forEach((button) => {
-      const disabled = !hasImage && button.dataset.tab !== "image";
+      const disabled = (!hasImage && button.dataset.tab !== "image") || (state.isCropping && button.dataset.tab !== "image");
       button.classList.toggle("disabled", disabled);
       button.disabled = disabled;
     });
@@ -1519,8 +1721,14 @@
       els.cropFocusButton,
     ];
     needsImageButtons.forEach((button) => {
-      button.disabled = !hasImage || state.isExporting;
+      button.disabled = !hasImage || state.isExporting || state.isCropping;
     });
+    els.cropFocusButton.disabled = !hasImage || state.isExporting || state.isCropping;
+    els.resetMaskButton.disabled = !hasImage || state.isExporting || state.isCropping || !state.cutoutApplied;
+    els.resetCropButton.disabled = !hasImage || state.isExporting || state.isCropping || !state.cropApplied;
+    els.applyCropButton.disabled = !state.isCropping || state.isExporting;
+    els.cancelCropButton.disabled = !state.isCropping || state.isExporting;
+    els.resetCropDraftButton.disabled = !state.isCropping || state.isExporting;
 
     const exportButtons = [
       els.exportPngButton,
@@ -1583,7 +1791,7 @@
     if (!els.zoomResetButton) {
       return;
     }
-    const canZoom = Boolean(state.sourceCanvas && state.finalCells.length && state.activeTab !== "image");
+    const canZoom = Boolean(state.sourceCanvas && state.finalCells.length && !state.isCropping);
     els.previewControls.setAttribute("aria-hidden", canZoom ? "false" : "true");
     [els.zoomOutButton, els.zoomResetButton, els.zoomInButton].forEach((button) => {
       button.disabled = !canZoom;
@@ -1592,7 +1800,7 @@
   }
 
   function previewScaleText() {
-    const scale = clamp(Number(state.transform.scale) || 1, 0.35, 18);
+    const scale = clamp(Number(state.transform.scale) || 1, minPreviewScale, maxPreviewScale);
     if (Math.abs(scale - 1) < 0.01) {
       return "1x";
     }
@@ -1600,6 +1808,20 @@
   }
 
   function workflowSummary(hasImage, hasPattern, totalBeads) {
+    if (state.isCropping) {
+      return {
+        title: "裁剪图片",
+        meta: "拖动裁剪框，应用后重新生成图纸。",
+        nextLabel: "应用裁剪",
+      };
+    }
+    if (state.isProcessing) {
+      return {
+        title: "正在生成",
+        meta: "参数调整后会自动更新",
+        nextLabel: "处理中",
+      };
+    }
     if (state.isExporting) {
       return {
         title: "正在导出",
@@ -1661,13 +1883,13 @@
     if (!state.sourceCanvas) {
       return "先选择一张图片";
     }
-    const bounds = cropBounds();
-    const full = bounds.x <= 0 && bounds.y <= 0 && bounds.width >= state.sourceCanvas.width && bounds.height >= state.sourceCanvas.height;
-    const cropText = full
+    if (state.isCropping) {
+      return "拖动裁剪框，应用后重新生成图纸。";
+    }
+    const cropText = !state.cropApplied
       ? "当前：整张图片 " + state.sourceCanvas.width + " x " + state.sourceCanvas.height
-      : "当前：已裁剪 " + bounds.width + " x " + bounds.height;
-    const maskEdited = state.maskHistory.length > 0;
-    return maskEdited ? cropText + " / 已处理背景" : cropText;
+      : "当前：已裁剪 " + state.sourceCanvas.width + " x " + state.sourceCanvas.height;
+    return state.cutoutApplied ? cropText + " / 已去背景" : cropText;
   }
 
   function renderMetricCards(container, items) {
@@ -2118,11 +2340,12 @@
   }
 
   function zoomPreview(factor) {
-    if (!state.sourceCanvas || !state.finalCells.length || state.activeTab === "image") {
+    if (!canZoomPreview()) {
       setStatus("生成图纸后可缩放预览");
       return;
     }
-    state.transform.scale = clamp(state.transform.scale * factor, 0.35, 18);
+    state.transform.scale = clamp(state.transform.scale * factor, minPreviewScale, previewMaxScale());
+    constrainPreviewTransform();
     drawPreview();
     setStatus("预览缩放 " + previewScaleText());
   }
@@ -2131,6 +2354,61 @@
     state.transform = { scale: 1, offsetX: 0, offsetY: 0 };
     drawPreview();
     setStatus("已重置预览缩放");
+  }
+
+  function canZoomPreview() {
+    return Boolean(state.sourceCanvas && state.finalCells.length && !state.isCropping);
+  }
+
+  function previewMaxScale() {
+    return clamp(Math.max(minPreviewButtonScale, previewReadableScale()), minPreviewButtonScale, maxPreviewScale);
+  }
+
+  function previewReadableScale() {
+    const pattern = state.pattern || {};
+    const beadWidth = Math.max(1, pattern.beadWidth || state.beadWidth);
+    const beadHeight = Math.max(1, pattern.beadHeight || state.beadHeight);
+    const rect = els.canvasWrap ? els.canvasWrap.getBoundingClientRect() : { width: 0, height: 0 };
+    const availableWidth = Math.max(1, (rect.width || 1) - previewPadding * 2);
+    const availableHeight = Math.max(1, (rect.height || 1) - previewPadding * 2);
+    const baseCellSize = Math.min(availableWidth / beadWidth, availableHeight / beadHeight);
+    return Math.ceil((previewCodeCellSize / Math.max(0.1, baseCellSize)) * 10) / 10;
+  }
+
+  function constrainPreviewTransform(viewWidth, viewHeight) {
+    if (!canZoomPreview()) {
+      state.transform.scale = minPreviewScale;
+      state.transform.offsetX = 0;
+      state.transform.offsetY = 0;
+      return state.transform;
+    }
+
+    const pattern = state.pattern || {};
+    const beadWidth = Math.max(1, pattern.beadWidth || state.beadWidth);
+    const beadHeight = Math.max(1, pattern.beadHeight || state.beadHeight);
+    const rect = els.canvasWrap ? els.canvasWrap.getBoundingClientRect() : { width: viewWidth || 0, height: viewHeight || 0 };
+    const width = Math.max(1, viewWidth || rect.width || 1);
+    const height = Math.max(1, viewHeight || rect.height || 1);
+    const scale = clamp(Number(state.transform.scale) || 1, minPreviewScale, previewMaxScale());
+
+    if (scale <= minPreviewScale) {
+      state.transform.scale = minPreviewScale;
+      state.transform.offsetX = 0;
+      state.transform.offsetY = 0;
+      return state.transform;
+    }
+
+    const availableWidth = Math.max(1, width - previewPadding * 2);
+    const availableHeight = Math.max(1, height - previewPadding * 2);
+    const baseCellSize = Math.min(availableWidth / beadWidth, availableHeight / beadHeight);
+    const patternWidth = beadWidth * baseCellSize * scale;
+    const patternHeight = beadHeight * baseCellSize * scale;
+    const maxOffsetX = Math.max(0, (patternWidth - availableWidth) / 2);
+    const maxOffsetY = Math.max(0, (patternHeight - availableHeight) / 2);
+    state.transform.scale = scale;
+    state.transform.offsetX = clamp(Number(state.transform.offsetX) || 0, -maxOffsetX, maxOffsetX);
+    state.transform.offsetY = clamp(Number(state.transform.offsetY) || 0, -maxOffsetY, maxOffsetY);
+    return state.transform;
   }
 
   function drawPreview() {
@@ -2150,21 +2428,26 @@
 
     if (!state.sourceCanvas) {
       state.contentRect = null;
+      drawEmptyPreview(ctx, width, height);
       updateZoomControls();
       return;
     }
 
-    if (state.activeTab === "image") {
-      drawImagePreview(ctx, width, height);
-    } else {
+    if (state.isCropping) {
+      drawCropPreview(ctx, width, height);
+    } else if (state.finalCells.length) {
       drawPatternPreview(ctx, width, height);
+    } else {
+      drawImagePreview(ctx, width, height);
     }
     updateZoomControls();
   }
 
   function drawImagePreview(ctx, width, height) {
     const source = state.sourceCanvas;
-    const transform = contentTransform(width, height, source.width, source.height);
+    const transform = contentTransform(width, height, source.width, source.height, {
+      interactive: false,
+    });
     state.contentRect = {
       x: transform.offsetX,
       y: transform.offsetY,
@@ -2180,218 +2463,405 @@
     ctx.translate(transform.offsetX, transform.offsetY);
     ctx.scale(transform.scale, transform.scale);
     ctx.drawImage(masked, 0, 0);
-
-    const crop = cropBounds();
-    ctx.save();
-    ctx.fillStyle = "rgba(17, 24, 39, 0.36)";
-    ctx.beginPath();
-    ctx.rect(0, 0, source.width, source.height);
-    ctx.rect(crop.x, crop.y, crop.width, crop.height);
-    ctx.fill("evenodd");
-    ctx.restore();
-
-    const lineWidth = Math.max(1 / transform.scale, 1);
-    ctx.lineWidth = lineWidth;
-    ctx.strokeStyle = "#df6b3b";
-    ctx.setLineDash([8 / transform.scale, 5 / transform.scale]);
-    ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
-    ctx.setLineDash([]);
-    drawCropHandles(ctx, crop, transform.scale, lineWidth);
     ctx.restore();
   }
 
-  function drawCropHandles(ctx, crop, scale, lineWidth) {
-    const size = Math.max(10 / scale, 6);
-    const half = size / 2;
-    const points = [
-      [crop.x, crop.y],
-      [crop.x + crop.width / 2, crop.y],
-      [crop.x + crop.width, crop.y],
-      [crop.x, crop.y + crop.height / 2],
-      [crop.x + crop.width, crop.y + crop.height / 2],
-      [crop.x, crop.y + crop.height],
-      [crop.x + crop.width / 2, crop.y + crop.height],
-      [crop.x + crop.width, crop.y + crop.height],
-    ];
+  function drawCropPreview(ctx, width, height) {
+    if (!state.originalCanvas || !state.originalSourceImageData) {
+      drawEmptyPreview(ctx, width, height);
+      return;
+    }
 
+    const sourceWidth = state.originalSourceImageData.width;
+    const sourceHeight = state.originalSourceImageData.height;
+    const layout = fitInside(sourceWidth, sourceHeight, width, height, previewPadding);
+    state.contentRect = {
+      x: layout.x,
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+      scale: layout.scale,
+      contentWidth: sourceWidth,
+      contentHeight: sourceHeight,
+    };
+
+    if (!state.cropDraft) {
+      state.cropDraft = createFullCropRect(sourceWidth, sourceHeight);
+      state.crop = cropToNormalized(state.cropDraft, sourceWidth, sourceHeight);
+    }
+
+    ctx.save();
     ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = "#df6b3b";
-    ctx.lineWidth = lineWidth;
-    points.forEach(([x, y]) => {
-      ctx.beginPath();
-      ctx.rect(x - half, y - half, size, size);
-      ctx.fill();
-      ctx.stroke();
-    });
+    roundedRect(ctx, layout.x - 4, layout.y - 4, layout.width + 8, layout.height + 8, 8);
+    ctx.fill();
+    ctx.drawImage(state.originalCanvas, 0, 0, sourceWidth, sourceHeight, layout.x, layout.y, layout.width, layout.height);
+    drawCropOverlay(ctx, layout, cropBounds());
+    ctx.restore();
   }
 
   function drawPatternPreview(ctx, width, height) {
-    const contentWidth = state.beadWidth;
-    const contentHeight = state.beadHeight;
-    const transform = contentTransform(width, height, contentWidth, contentHeight);
+    const pattern = state.pattern || {};
+    const beadWidth = pattern.beadWidth || state.beadWidth;
+    const beadHeight = pattern.beadHeight || state.beadHeight;
+    if (!state.finalCells.length || !beadWidth || !beadHeight) {
+      drawEmptyPreview(ctx, width, height);
+      return;
+    }
+
+    constrainPreviewTransform(width, height);
+    const availableWidth = Math.max(1, width - previewPadding * 2);
+    const availableHeight = Math.max(1, height - previewPadding * 2);
+    const baseCellSize = Math.min(availableWidth / beadWidth, availableHeight / beadHeight);
+    const cellSize = baseCellSize * state.transform.scale;
+    const patternWidth = beadWidth * cellSize;
+    const patternHeight = beadHeight * cellSize;
+    const dpr = window.devicePixelRatio || 1;
+    const originX = alignToDevicePixel((width - patternWidth) / 2 + state.transform.offsetX, dpr);
+    const originY = alignToDevicePixel((height - patternHeight) / 2 + state.transform.offsetY, dpr);
+    const visibleBounds = visibleCellBounds(originX, originY, beadWidth, beadHeight, cellSize, width, height);
     state.contentRect = {
-      x: transform.offsetX,
-      y: transform.offsetY,
-      width: contentWidth * transform.scale,
-      height: contentHeight * transform.scale,
-      scale: transform.scale,
-      contentWidth,
-      contentHeight,
+      x: originX,
+      y: originY,
+      width: patternWidth,
+      height: patternHeight,
+      scale: cellSize,
+      contentWidth: beadWidth,
+      contentHeight: beadHeight,
     };
 
     ctx.save();
-    ctx.translate(transform.offsetX, transform.offsetY);
-    ctx.scale(transform.scale, transform.scale);
-    drawPatternCells(ctx, {
-      cellSize: 1,
-      showGrid: state.showGrid,
-      showBoard: state.showBoard,
-      showCodes: state.showCodes,
-      displayCellSize: transform.scale,
-      lineWidth: Math.max(1 / transform.scale, 0.025),
-      exportMode: false,
-      visibleRect: {
-        left: (0 - transform.offsetX) / transform.scale,
-        top: (0 - transform.offsetY) / transform.scale,
-        right: (width - transform.offsetX) / transform.scale,
-        bottom: (height - transform.offsetY) / transform.scale,
-      },
-    });
+    setImageSmoothing(ctx, false);
+    ctx.fillStyle = "#ffffff";
+    roundedRect(ctx, originX - 4, originY - 4, patternWidth + 8, patternHeight + 8, 8);
+    ctx.fill();
+
+    if (state.isPreviewInteracting) {
+      ensurePatternCache(cellSize, beadWidth, beadHeight);
+    }
+    if (state.isPreviewInteracting && state.patternCacheCanvas && !state.patternCacheDirty) {
+      ctx.drawImage(state.patternCacheCanvas, originX, originY, patternWidth, patternHeight);
+    } else {
+      drawCells(ctx, state.finalCells, originX, originY, beadWidth, beadHeight, cellSize, visibleBounds);
+    }
+
+    if (state.showGrid && !state.isPreviewInteracting && cellSize >= 7) {
+      drawGrid(ctx, originX, originY, beadWidth, beadHeight, cellSize, visibleBounds);
+    }
+    if (state.showBoard) {
+      drawBoardLines(ctx, originX, originY, beadWidth, beadHeight, cellSize, state.boardWidth, state.boardHeight, visibleBounds);
+    }
+    if (state.showCodes && !state.isPreviewInteracting && cellSize >= previewCodeCellSize) {
+      drawCodes(ctx, state.finalCells, originX, originY, beadWidth, beadHeight, cellSize, visibleBounds);
+    }
+
+    ctx.strokeStyle = "#17202a";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(originX, originY, patternWidth, patternHeight);
     ctx.restore();
   }
 
-  function drawPatternCells(ctx, options) {
-    const width = state.beadWidth;
-    const height = state.beadHeight;
-    const visible = visibleCellRange(width, height, options.visibleRect);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
+  function ensurePatternCache(cellSize, beadWidth, beadHeight) {
+    if (!state.finalCells.length) {
+      return;
+    }
+    if (!state.patternCacheCanvas) {
+      state.patternCacheCanvas = document.createElement("canvas");
+      state.patternCacheCtx = state.patternCacheCanvas.getContext("2d");
+    }
+    const signature = String(state.patternVersion);
+    const cacheCellSize = patternCacheCellSize(beadWidth, beadHeight, cellSize, window.devicePixelRatio || 1);
+    if (
+      !state.patternCacheDirty &&
+      state.patternCacheSignature === signature &&
+      state.patternCacheCellSize >= cacheCellSize
+    ) {
+      return;
+    }
 
-    for (let y = visible.y0; y < visible.y1; y += 1) {
-      for (let x = visible.x0; x < visible.x1; x += 1) {
-        const id = state.finalCells[y * width + x];
-        if (!id) {
-          continue;
-        }
+    const cacheWidth = beadWidth * cacheCellSize;
+    const cacheHeight = beadHeight * cacheCellSize;
+    state.patternCacheCanvas.width = cacheWidth;
+    state.patternCacheCanvas.height = cacheHeight;
+    const ctx = state.patternCacheCtx;
+    setImageSmoothing(ctx, false);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cacheWidth, cacheHeight);
+    drawCells(ctx, state.finalCells, 0, 0, beadWidth, beadHeight, cacheCellSize);
+    state.patternCacheSignature = signature;
+    state.patternCacheCellSize = cacheCellSize;
+    state.patternCacheDirty = false;
+  }
+
+  function drawCells(ctx, cells, originX, originY, beadWidth, beadHeight, cellSize, bounds) {
+    const range = normalizeCellBounds(bounds, beadWidth, beadHeight);
+    for (let y = range.startY; y < range.endY; y += 1) {
+      for (let x = range.startX; x < range.endX; x += 1) {
+        const id = cells[y * beadWidth + x];
         const color = paletteById.get(id);
         if (!color) {
           continue;
         }
         ctx.fillStyle = color.hex;
-        ctx.fillRect(x, y, 1, 1);
+        ctx.fillRect(originX + x * cellSize, originY + y * cellSize, Math.ceil(cellSize) + 0.2, Math.ceil(cellSize) + 0.2);
       }
     }
-
-    if (options.showGrid) {
-      ctx.strokeStyle = "rgba(23, 32, 42, 0.22)";
-      ctx.lineWidth = options.lineWidth;
-      ctx.beginPath();
-      for (let x = visible.x0; x <= visible.x1; x += 1) {
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-      }
-      for (let y = visible.y0; y <= visible.y1; y += 1) {
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-      }
-      ctx.stroke();
-    }
-
-    if (options.showCodes) {
-      drawCellCodes(ctx, options);
-    }
-
-    if (options.showBoard) {
-      ctx.strokeStyle = "#df6b3b";
-      ctx.lineWidth = options.lineWidth * 2.2;
-      ctx.beginPath();
-      for (let x = 0; x <= width; x += state.boardWidth) {
-        if (x >= visible.x0 && x <= visible.x1) {
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, height);
-        }
-      }
-      for (let y = 0; y <= height; y += state.boardHeight) {
-        if (y >= visible.y0 && y <= visible.y1) {
-          ctx.moveTo(0, y);
-          ctx.lineTo(width, y);
-        }
-      }
-      ctx.stroke();
-    }
-
   }
 
-  function visibleCellRange(width, height, rect) {
-    if (!rect) {
-      return { x0: 0, y0: 0, x1: width, y1: height };
+  function drawGrid(ctx, originX, originY, beadWidth, beadHeight, cellSize, bounds) {
+    const range = normalizeCellBounds(bounds, beadWidth, beadHeight);
+    const y1 = originY + range.startY * cellSize;
+    const y2 = originY + range.endY * cellSize;
+    const x1 = originX + range.startX * cellSize;
+    const x2 = originX + range.endX * cellSize;
+    ctx.save();
+    ctx.strokeStyle = "rgba(23, 32, 42, 0.18)";
+    ctx.lineWidth = 0.5;
+    for (let x = Math.max(1, range.startX); x <= Math.min(beadWidth - 1, range.endX); x += 1) {
+      const px = originX + x * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(px, y1);
+      ctx.lineTo(px, y2);
+      ctx.stroke();
     }
-    return {
-      x0: clampInt(Math.floor(rect.left) - 1, 0, width),
-      y0: clampInt(Math.floor(rect.top) - 1, 0, height),
-      x1: clampInt(Math.ceil(rect.right) + 1, 0, width),
-      y1: clampInt(Math.ceil(rect.bottom) + 1, 0, height),
-    };
+    for (let y = Math.max(1, range.startY); y <= Math.min(beadHeight - 1, range.endY); y += 1) {
+      const py = originY + y * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(x1, py);
+      ctx.lineTo(x2, py);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
-  function drawCellCodes(ctx, options) {
-    const displayCellSize = Number(options.displayCellSize || options.cellSize || 1);
-    if (displayCellSize < 10) {
-      return;
+  function drawBoardLines(ctx, originX, originY, beadWidth, beadHeight, cellSize, boardWidth, boardHeight, bounds) {
+    const stepX = clampInt(boardWidth, 8, 80);
+    const stepY = clampInt(boardHeight, 8, 80);
+    const range = normalizeCellBounds(bounds, beadWidth, beadHeight);
+    const y1 = originY + range.startY * cellSize;
+    const y2 = originY + range.endY * cellSize;
+    const x1 = originX + range.startX * cellSize;
+    const x2 = originX + range.endX * cellSize;
+    const firstBoardX = Math.max(stepX, Math.ceil(range.startX / stepX) * stepX);
+    const firstBoardY = Math.max(stepY, Math.ceil(range.startY / stepY) * stepY);
+    ctx.save();
+    ctx.strokeStyle = "rgba(31, 122, 140, 0.8)";
+    ctx.lineWidth = Math.max(1, Math.min(3, cellSize * 0.11));
+    for (let x = firstBoardX; x < beadWidth && x <= range.endX; x += stepX) {
+      const px = originX + x * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(px, y1);
+      ctx.lineTo(px, y2);
+      ctx.stroke();
     }
+    for (let y = firstBoardY; y < beadHeight && y <= range.endY; y += stepY) {
+      const py = originY + y * cellSize;
+      ctx.beginPath();
+      ctx.moveTo(x1, py);
+      ctx.lineTo(x2, py);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
-    const width = state.beadWidth;
-    const height = state.beadHeight;
-    const visible = visibleCellRange(width, height, options.visibleRect);
-    const fontPx = clamp(displayCellSize * 0.34, 4.5, 10);
-    const fontSize = fontPx / displayCellSize;
-
+  function drawCodes(ctx, cells, originX, originY, beadWidth, beadHeight, cellSize, bounds) {
+    const range = normalizeCellBounds(bounds, beadWidth, beadHeight);
     ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font =
-      "700 " +
-      fontSize.toFixed(3) +
-      'px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
-    ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(0.035, fontSize * 0.14);
-
-    for (let y = visible.y0; y < visible.y1; y += 1) {
-      for (let x = visible.x0; x < visible.x1; x += 1) {
-        const id = state.finalCells[y * width + x];
-        if (!id) {
-          continue;
-        }
+    ctx.font = Math.max(8, Math.floor(cellSize * 0.38)) + "px sans-serif";
+    for (let y = range.startY; y < range.endY; y += 1) {
+      for (let x = range.startX; x < range.endX; x += 1) {
+        const id = cells[y * beadWidth + x];
         const color = paletteById.get(id);
         if (!color) {
           continue;
         }
-        const darkText = colorBrightness(color.rgb) > 150;
-        ctx.fillStyle = darkText ? "rgba(17, 24, 39, 0.9)" : "rgba(255, 255, 255, 0.94)";
-        ctx.strokeStyle = darkText ? "rgba(255, 255, 255, 0.68)" : "rgba(17, 24, 39, 0.62)";
-        ctx.strokeText(color.code, x + 0.5, y + 0.52);
-        ctx.fillText(color.code, x + 0.5, y + 0.52);
+        ctx.fillStyle = readableTextColor(color.rgb);
+        ctx.fillText(color.code, originX + x * cellSize + cellSize / 2, originY + y * cellSize + cellSize / 2);
       }
     }
     ctx.restore();
   }
 
-  function colorBrightness(rgb) {
-    return 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+  function visibleCellBounds(originX, originY, beadWidth, beadHeight, cellSize, viewportWidth, viewportHeight) {
+    const safeCellSize = Math.max(0.1, cellSize);
+    const startX = Math.floor((0 - originX) / safeCellSize) - 1;
+    const startY = Math.floor((0 - originY) / safeCellSize) - 1;
+    const endX = Math.ceil((viewportWidth - originX) / safeCellSize) + 1;
+    const endY = Math.ceil((viewportHeight - originY) / safeCellSize) + 1;
+    return normalizeCellBounds({ startX, startY, endX, endY }, beadWidth, beadHeight);
   }
 
-  function contentTransform(viewWidth, viewHeight, contentWidth, contentHeight) {
-    const padding = 28;
+  function normalizeCellBounds(bounds, beadWidth, beadHeight) {
+    if (!bounds) {
+      return {
+        startX: 0,
+        startY: 0,
+        endX: beadWidth,
+        endY: beadHeight,
+      };
+    }
+    const startX = clampInt(bounds.startX, 0, beadWidth);
+    const startY = clampInt(bounds.startY, 0, beadHeight);
+    const endX = clampInt(bounds.endX, startX, beadWidth);
+    const endY = clampInt(bounds.endY, startY, beadHeight);
+    return { startX, startY, endX, endY };
+  }
+
+  function contentTransform(viewWidth, viewHeight, contentWidth, contentHeight, options) {
+    const padding = options && options.padding !== undefined ? options.padding : previewPadding;
     const fitScale = Math.min(
       (viewWidth - padding * 2) / contentWidth,
       (viewHeight - padding * 2) / contentHeight,
     );
-    const scale = Math.max(0.01, fitScale * state.transform.scale);
+    const scale = Math.max(0.01, fitScale * ((options && options.interactive) === false ? 1 : state.transform.scale));
     return {
       scale,
-      offsetX: (viewWidth - contentWidth * scale) / 2 + state.transform.offsetX,
-      offsetY: (viewHeight - contentHeight * scale) / 2 + state.transform.offsetY,
+      offsetX: (viewWidth - contentWidth * scale) / 2 + ((options && options.interactive) === false ? 0 : state.transform.offsetX),
+      offsetY: (viewHeight - contentHeight * scale) / 2 + ((options && options.interactive) === false ? 0 : state.transform.offsetY),
     };
+  }
+
+  function drawEmptyPreview(ctx, width, height) {
+    const size = Math.min(width, height) * 0.26;
+    const gap = size * 0.08;
+    const bead = (size - gap) / 2;
+    const x = (width - size) / 2;
+    const y = (height - size) / 2 - 10;
+    const colors = ["#1f7a8c", "#df6b3b", "#f2c14e", "#ffffff"];
+
+    colors.forEach((color, index) => {
+      const px = x + (index % 2) * (bead + gap);
+      const py = y + Math.floor(index / 2) * (bead + gap);
+      ctx.fillStyle = color;
+      roundedRect(ctx, px, py, bead, bead, 8);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(23, 32, 42, 0.14)";
+      ctx.stroke();
+    });
+  }
+
+  function drawCropOverlay(ctx, layout, cropRect) {
+    const crop = sourceToCanvasRect(cropRect, layout);
+    const cropRight = crop.x + crop.width;
+    const cropBottom = crop.y + crop.height;
+    const layoutRight = layout.x + layout.width;
+    const layoutBottom = layout.y + layout.height;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(23, 32, 42, 0.46)";
+    ctx.fillRect(layout.x, layout.y, layout.width, Math.max(0, crop.y - layout.y));
+    ctx.fillRect(layout.x, cropBottom, layout.width, Math.max(0, layoutBottom - cropBottom));
+    ctx.fillRect(layout.x, crop.y, Math.max(0, crop.x - layout.x), crop.height);
+    ctx.fillRect(cropRight, crop.y, Math.max(0, layoutRight - cropRight), crop.height);
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i <= 2; i += 1) {
+      const x = crop.x + (crop.width * i) / 3;
+      const y = crop.y + (crop.height * i) / 3;
+      ctx.beginPath();
+      ctx.moveTo(x, crop.y);
+      ctx.lineTo(x, cropBottom);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(crop.x, y);
+      ctx.lineTo(cropRight, y);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
+    ctx.strokeStyle = "#1f7a8c";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
+    drawCropHandles(ctx, crop);
+    ctx.restore();
+  }
+
+  function drawCropHandles(ctx, crop) {
+    [
+      { x: crop.x, y: crop.y },
+      { x: crop.x + crop.width, y: crop.y },
+      { x: crop.x, y: crop.y + crop.height },
+      { x: crop.x + crop.width, y: crop.y + crop.height },
+    ].forEach((point) => {
+      ctx.fillStyle = "#ffffff";
+      roundedRect(ctx, point.x - 11, point.y - 11, 22, 22, 6);
+      ctx.fill();
+      ctx.strokeStyle = "#1f7a8c";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
+  }
+
+  function roundedRect(ctx, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function fitInside(sourceWidth, sourceHeight, targetWidth, targetHeight, padding) {
+    const availableWidth = Math.max(1, targetWidth - padding * 2);
+    const availableHeight = Math.max(1, targetHeight - padding * 2);
+    const scale = Math.min(availableWidth / sourceWidth, availableHeight / sourceHeight);
+    const width = sourceWidth * scale;
+    const height = sourceHeight * scale;
+    return {
+      x: (targetWidth - width) / 2,
+      y: (targetHeight - height) / 2,
+      width,
+      height,
+      scale,
+    };
+  }
+
+  function sourceToCanvasRect(rect, layout) {
+    return {
+      x: layout.x + rect.x * layout.scale,
+      y: layout.y + rect.y * layout.scale,
+      width: rect.width * layout.scale,
+      height: rect.height * layout.scale,
+    };
+  }
+
+  function setImageSmoothing(ctx, enabled) {
+    if (!ctx) {
+      return;
+    }
+    ctx.imageSmoothingEnabled = enabled;
+    ctx.mozImageSmoothingEnabled = enabled;
+    ctx.webkitImageSmoothingEnabled = enabled;
+    ctx.msImageSmoothingEnabled = enabled;
+  }
+
+  function alignToDevicePixel(value, dpr) {
+    const ratio = Math.max(1, dpr || 1);
+    return Math.round(value * ratio) / ratio;
+  }
+
+  function patternCacheCellSize(beadWidth, beadHeight, cellSize, dpr) {
+    const width = Math.max(1, beadWidth);
+    const height = Math.max(1, beadHeight);
+    const target = Math.max(1, Math.ceil(Math.max(1, cellSize) * Math.max(1, dpr || 1)));
+    const sideLimit = Math.max(1, Math.floor(maxPatternCacheSide / Math.max(width, height)));
+    const pixelLimit = Math.max(1, Math.floor(Math.sqrt(maxPatternCachePixels / (width * height))));
+    return Math.max(1, Math.min(target, sideLimit, pixelLimit));
+  }
+
+  function readableTextColor(rgb) {
+    const brightness = (rgb.r * 299 + rgb.g * 587 + rgb.b * 114) / 1000;
+    return brightness > 145 ? "#17202a" : "#ffffff";
   }
 
   function getMaskedCanvas() {
@@ -2419,12 +2889,14 @@
       return;
     }
 
+    const canZoom = canZoomPreview();
     state.activePointers.set(event.pointerId, {
       clientX: event.clientX,
       clientY: event.clientY,
     });
-    if (state.activePointers.size >= 2) {
+    if (state.activePointers.size >= 2 && canZoom) {
       event.preventDefault();
+      state.isPreviewInteracting = true;
       state.interaction = createPinchInteraction();
       try {
         els.previewCanvas.setPointerCapture(event.pointerId);
@@ -2435,21 +2907,25 @@
     }
 
     const point = pointerToContent(event);
-    if (state.activeTab === "image" && point) {
+    if (state.isCropping && point && state.activeTool === "view") {
+      const cropHandle = cropHitTest(point);
+      if (cropHandle) {
+        event.preventDefault();
+        state.interaction = {
+          type: "crop",
+          handle: cropHandle,
+          startPoint: point,
+          startRect: cropBounds(),
+        };
+        els.previewCanvas.setPointerCapture(event.pointerId);
+        setStatus(cropHandle === "move" ? "拖动裁剪框调整位置" : "拖动裁剪框边缘调整范围");
+      }
+      return;
+    }
+
+    if (!state.isCropping && state.activeTab === "image" && point && !state.finalCells.length) {
       if (state.activeTool === "view") {
-        const cropHandle = cropHitTest(point);
-        if (cropHandle) {
-          event.preventDefault();
-          state.interaction = {
-            type: "crop",
-            handle: cropHandle,
-            startPoint: point,
-            startRect: cropBounds(),
-          };
-          els.previewCanvas.setPointerCapture(event.pointerId);
-          setStatus(cropHandle === "move" ? "拖动裁剪框调整位置" : "拖动裁剪框边缘调整范围");
-          return;
-        }
+        return;
       }
       if (state.activeTool === "magic") {
         pushMaskHistory();
@@ -2471,6 +2947,11 @@
       }
     }
 
+    if (!canZoom) {
+      return;
+    }
+
+    state.isPreviewInteracting = true;
     state.interaction = {
       type: "pan",
       lastX: event.clientX,
@@ -2487,7 +2968,7 @@
       });
     }
 
-    if (!state.interaction && state.activeTab === "image" && state.activeTool === "view") {
+    if (!state.interaction && state.isCropping && state.activeTool === "view") {
       updateCropCursor(pointerToContent(event));
       return;
     }
@@ -2524,6 +3005,7 @@
       state.transform.offsetY += event.clientY - state.interaction.lastY;
       state.interaction.lastX = event.clientX;
       state.interaction.lastY = event.clientY;
+      constrainPreviewTransform();
       drawPreview();
     }
   }
@@ -2547,10 +3029,12 @@
       renderAll();
     }
     if (wasCrop) {
-      scheduleRecompute();
+      drawPreview();
       setStatus("裁剪范围已更新");
     }
-    if (wasPinch) {
+    if (wasPinch || state.isPreviewInteracting) {
+      state.isPreviewInteracting = false;
+      drawPreview();
       setStatus("预览缩放已更新");
     }
   }
@@ -2571,13 +3055,17 @@
     if (!state.interaction || state.interaction.type !== "pinch" || state.activePointers.size < 2) {
       return;
     }
+    if (!canZoomPreview()) {
+      return;
+    }
     const pinch = currentPinch();
     const distanceRatio = pinch.distance / Math.max(1, state.interaction.startDistance);
-    state.transform.scale = clamp(state.interaction.startScale * distanceRatio, 0.35, 18);
+    state.transform.scale = clamp(state.interaction.startScale * distanceRatio, minPreviewScale, previewMaxScale());
     state.transform.offsetX =
       state.interaction.startOffsetX + pinch.center.clientX - state.interaction.startCenter.clientX;
     state.transform.offsetY =
       state.interaction.startOffsetY + pinch.center.clientY - state.interaction.startCenter.clientY;
+    constrainPreviewTransform();
     drawPreview();
   }
 
@@ -2595,14 +3083,15 @@
   }
 
   function handleWheel(event) {
-    if (!state.sourceCanvas) {
+    if (!canZoomPreview()) {
       return;
     }
     event.preventDefault();
     const rect = els.previewCanvas.getBoundingClientRect();
     const before = pointerToContent(event);
     const factor = event.deltaY < 0 ? 1.12 : 0.89;
-    state.transform.scale = clamp(state.transform.scale * factor, 0.35, 18);
+    state.transform.scale = clamp(state.transform.scale * factor, minPreviewScale, previewMaxScale());
+    constrainPreviewTransform();
     drawPreview();
 
     if (before && state.contentRect) {
@@ -2610,6 +3099,7 @@
       const afterScreenY = state.contentRect.y + before.y * state.contentRect.scale;
       state.transform.offsetX += event.clientX - rect.left - afterScreenX;
       state.transform.offsetY += event.clientY - rect.top - afterScreenY;
+      constrainPreviewTransform();
       drawPreview();
     }
   }
@@ -2641,7 +3131,7 @@
   }
 
   function cropHitTest(point) {
-    if (!state.contentRect || state.activeTab !== "image") {
+    if (!state.contentRect || !state.isCropping) {
       return null;
     }
     const crop = cropBounds();
@@ -2964,92 +3454,137 @@
   }
 
   function createPatternExportCanvas() {
-    const maxDim = Math.max(state.beadWidth, state.beadHeight);
-    const cellSize = maxDim <= 120 ? 24 : maxDim <= 220 ? 18 : 12;
-    const patternWidth = state.beadWidth * cellSize;
-    const patternHeight = state.beadHeight * cellSize;
-    const columns = patternWidth >= 1300 ? 3 : patternWidth >= 760 ? 2 : 1;
-    const rowHeight = 28;
-    const statsRows = Math.max(1, Math.ceil(state.stats.length / columns));
-    const statsHeight = 94 + statsRows * rowHeight;
+    const pattern = state.pattern || {};
+    const beadWidth = pattern.beadWidth || state.beadWidth;
+    const beadHeight = pattern.beadHeight || state.beadHeight;
+    const cellSize = exportCellSize(beadWidth, beadHeight);
+    const patternWidth = beadWidth * cellSize;
+    const patternHeight = beadHeight * cellSize;
+    const width = Math.max(patternWidth, exportMinStatsWidth);
+    const statsLayout = exportStatsLayout(state.stats, width);
+    const height = patternHeight + statsLayout.height;
+    const patternX = Math.floor((width - patternWidth) / 2);
     const canvas = document.createElement("canvas");
-    canvas.width = patternWidth;
-    canvas.height = patternHeight + statsHeight;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingEnabled = false;
+    setImageSmoothing(ctx, false);
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(cellSize, cellSize);
-    drawPatternCells(ctx, {
-      showGrid: true,
-      showBoard: true,
-      showCodes: true,
-      displayCellSize: cellSize,
-      lineWidth: 1 / cellSize,
-      exportMode: true,
-    });
-    ctx.restore();
-    drawExportStats(ctx, patternHeight, patternWidth, statsHeight, columns, rowHeight);
+    ctx.fillRect(0, 0, width, height);
+    drawCells(ctx, state.finalCells, patternX, 0, beadWidth, beadHeight, cellSize);
+    drawGrid(ctx, patternX, 0, beadWidth, beadHeight, cellSize);
+    drawBoardLines(ctx, patternX, 0, beadWidth, beadHeight, cellSize, state.boardWidth, state.boardHeight);
+    if (cellSize >= previewCodeCellSize) {
+      drawCodes(ctx, state.finalCells, patternX, 0, beadWidth, beadHeight, cellSize);
+    }
+    ctx.strokeStyle = "#17202a";
+    ctx.lineWidth = Math.max(1, cellSize * 0.06);
+    ctx.strokeRect(patternX, 0, patternWidth, patternHeight);
+    drawExportStats(ctx, patternHeight, width, statsLayout, beadWidth, beadHeight);
     return canvas;
   }
 
-  function drawExportStats(ctx, top, width, height, columns, rowHeight) {
+  function drawExportStats(ctx, top, width, layout, beadWidth, beadHeight) {
     const totalBeads = state.stats.reduce((sum, item) => sum + item.count, 0);
-    const boardX = Math.ceil(state.beadWidth / state.boardWidth);
-    const boardY = Math.ceil(state.beadHeight / state.boardHeight);
-    const padding = 22;
+    if (!state.stats.length || layout.height <= 0) {
+      return;
+    }
+
+    const padding = exportStatsPadding;
     ctx.save();
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, top, width, height);
-    ctx.strokeStyle = "#17202a";
+    ctx.fillRect(0, top, width, layout.height);
+    ctx.strokeStyle = "#d7dee8";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(0, top + 1);
-    ctx.lineTo(width, top + 1);
+    ctx.moveTo(padding, top + 22);
+    ctx.lineTo(width - padding, top + 22);
     ctx.stroke();
 
     ctx.fillStyle = "#17202a";
-    ctx.font = '700 22px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
-    ctx.fillText("颜色统计清单", padding, top + 34);
-    ctx.font = '14px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.font = '700 30px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
+    ctx.fillText("颜色统计清单", padding, top + 62);
     ctx.fillStyle = "#5d6b7a";
+    ctx.font = '22px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
     ctx.fillText(
       "尺寸 " +
-        state.beadWidth +
+        beadWidth +
         " x " +
-        state.beadHeight +
-        " · 总颗数 " +
+        beadHeight +
+        " / 总颗数 " +
         formatNumber(totalBeads) +
-        " · 颜色 " +
+        " / " +
         state.stats.length +
-        " · 预计板数 " +
-        boardX +
-        " x " +
-        boardY,
-      padding,
-      top + 58,
+        " 色",
+      padding + 210,
+      top + 62,
     );
 
-    const columnWidth = Math.max(1, (width - padding * 2) / columns);
+    ctx.font = '22px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
     state.stats.forEach((item, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const x = padding + column * columnWidth;
-      const y = top + 86 + row * rowHeight;
+      const column = Math.floor(index / layout.rows);
+      const row = index % layout.rows;
+      const x = padding + column * layout.columnWidth;
+      const y = top + exportStatsHeaderHeight + row * exportStatsRowHeight;
       ctx.fillStyle = item.color.hex;
       ctx.strokeStyle = "rgba(0, 0, 0, 0.22)";
       ctx.lineWidth = 1;
-      ctx.fillRect(x, y - 15, 16, 16);
-      ctx.strokeRect(x, y - 15, 16, 16);
+      ctx.fillRect(x, y + 7, 22, 22);
+      ctx.strokeRect(x, y + 7, 22, 22);
       ctx.fillStyle = "#17202a";
-      ctx.font = '700 13px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
-      ctx.fillText(item.color.code, x + 24, y - 2);
-      ctx.font = '13px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
-      const name = item.color.name.length > 18 ? item.color.name.slice(0, 18) + "..." : item.color.name;
-      ctx.fillText(name + " · " + formatNumber(item.count) + " 颗", x + 68, y - 2);
+      ctx.font = '700 22px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
+      ctx.fillText(item.color.code, x + 34, y + 27);
+      ctx.fillStyle = "#5d6b7a";
+      ctx.font = '22px Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif';
+      const name = truncateText(ctx, item.color.name, Math.max(36, layout.columnWidth - 178));
+      ctx.fillText(name, x + 92, y + 27);
+      ctx.fillStyle = "#17202a";
+      ctx.textAlign = "right";
+      ctx.fillText(formatNumber(item.count), x + layout.columnWidth - 18, y + 27);
+      ctx.textAlign = "left";
     });
     ctx.restore();
+  }
+
+  function exportCellSize(beadWidth, beadHeight) {
+    const maxDim = Math.max(1, beadWidth, beadHeight);
+    const preferred = maxDim <= 90 ? 36 : maxDim <= 140 ? 32 : maxDim <= 220 ? 28 : 24;
+    const sideLimit = Math.max(16, Math.floor(exportMaxPatternSide / maxDim));
+    return Math.max(16, Math.min(preferred, sideLimit));
+  }
+
+  function exportStatsLayout(stats, width) {
+    const count = Array.isArray(stats) ? stats.length : 0;
+    if (!count) {
+      return {
+        columnWidth: Math.max(1, width - exportStatsPadding * 2),
+        columns: 1,
+        height: 0,
+        rows: 0,
+      };
+    }
+    const availableWidth = Math.max(1, width - exportStatsPadding * 2);
+    const columns = Math.max(1, Math.floor(availableWidth / exportStatsColumnMinWidth));
+    const rows = Math.ceil(count / columns);
+    return {
+      columnWidth: availableWidth / columns,
+      columns,
+      height: exportStatsHeaderHeight + rows * exportStatsRowHeight + exportStatsPadding,
+      rows,
+    };
+  }
+
+  function truncateText(ctx, text, maxWidth) {
+    if (!text || maxWidth <= 0 || ctx.measureText(text).width <= maxWidth) {
+      return text || "";
+    }
+    let result = String(text);
+    while (result.length > 1 && ctx.measureText(result + "...").width > maxWidth) {
+      result = result.slice(0, -1);
+    }
+    return result.length > 1 ? result + "..." : "";
   }
 
   function saveProjectToDisk() {
@@ -3069,12 +3604,16 @@
       return null;
     }
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       savedAt: new Date().toISOString(),
       imageName: state.imageName,
-      imageDataUrl: state.sourceCanvas.toDataURL("image/png"),
+      imageDataUrl: (state.originalCanvas || state.sourceCanvas).toDataURL("image/png"),
+      currentImageDataUrl: state.sourceCanvas.toDataURL("image/png"),
       maskDataUrl: createMaskDataUrl(),
       crop: state.crop,
+      appliedCropRect: state.appliedCropRect,
+      cropApplied: state.cropApplied,
+      cutoutApplied: state.cutoutApplied,
       cropAspect: state.cropAspect,
       beadWidth: state.beadWidth,
       beadHeight: state.beadHeight,
@@ -3153,55 +3692,115 @@
     const image = new Image();
     image.onload = () => {
       setupSourceFromImage(image, payload.imageName || "已载入项目");
-      state.crop = normalizeCrop(payload.crop || state.crop);
-      state.beadWidth = clampInt(payload.beadWidth || 48, 8, beadLimit);
-      state.beadHeight = clampInt(payload.beadHeight || 48, 8, beadLimit);
-      state.lockAspect = Boolean(payload.lockAspect);
-      state.beadMm = numberOrDefault(payload.beadMm, 5, 2, 10);
-      state.boardWidth = clampInt(payload.boardWidth || 29, 8, 80);
-      state.boardHeight = clampInt(payload.boardHeight || 29, 8, 80);
-      state.alphaThreshold = clampInt(payload.alphaThreshold || 20, 0, 255);
-      state.contrast = clampInt(payload.contrast || 0, -50, 100);
-      state.saturation = clampInt(payload.saturation || 0, -50, 100);
-      state.tolerance = clampInt(payload.tolerance || 54, 0, 160);
-      state.brushSize = clampInt(payload.brushSize || 24, 4, 80);
-      state.samplingMode = validOption(payload.samplingMode, ["shape", "balanced", "smooth"], "balanced");
-      state.cropAspect = validOption(payload.cropAspect, ["free", "original", "1:1", "4:3", "3:4", "16:9", "9:16"], "free");
-      state.coverageThreshold = clampInt(payload.coverageThreshold || 12, 5, 70);
-      state.edgeBoost = clampInt(payload.edgeBoost || 35, 0, 100);
-      state.maxColors = clampInt(payload.maxColors || 24, 2, palette.length);
-      state.dither = payload.dither || "none";
-      state.disabledColors = sanitizeDisabledColors(payload.disabledColors || []);
-      state.replacementMap = sanitizeReplacementMap(payload.replacementMap || []);
-      state.border = normalizeBorderConfig(payload.border || defaultBorderConfig(), paletteById);
-      state.showGrid = payload.showGrid === undefined ? true : Boolean(payload.showGrid);
-      state.showBoard = payload.showBoard === undefined ? true : Boolean(payload.showBoard);
-      state.showCodes = payload.showCodes === undefined ? true : Boolean(payload.showCodes);
-      state.replaceExpanded.clear();
-      state.replaceShowAll.clear();
-      syncFormFromState();
-
-      if (payload.maskDataUrl) {
-        loadMaskDataUrl(payload.maskDataUrl, () => {
-          recomputePattern();
-          renderAll();
-          state.isRestoringDraft = false;
-          scheduleDraftSave();
-          setStatus("项目已载入");
-        });
-      } else {
-        recomputePattern();
-        renderAll();
-        state.isRestoringDraft = false;
-        scheduleDraftSave();
-        setStatus("项目已载入");
-      }
+      restoreProjectImageState(payload, () => finishRestoreProject(payload));
     };
     image.onerror = () => {
       state.isRestoringDraft = false;
       setStatus("项目中的图片无法读取");
     };
     image.src = payload.imageDataUrl;
+  }
+
+  function restoreProjectImageState(payload, done) {
+    if (payload && payload.schemaVersion >= 3) {
+      const original = state.originalSourceImageData;
+      const full = original ? createFullCropRect(original.width, original.height) : null;
+      const rect = full && payload.appliedCropRect ? normalizeCropRect(payload.appliedCropRect, full.width, full.height) : full;
+      state.appliedCropRect = rect || state.appliedCropRect;
+      state.cropApplied =
+        payload.cropApplied === undefined && rect && full ? !isFullCropRect(rect, full.width, full.height) : Boolean(payload.cropApplied);
+      state.cutoutApplied = Boolean(payload.cutoutApplied);
+      state.cropDraft = null;
+      state.crop = { left: 0, right: 1, top: 0, bottom: 1 };
+      state.isCropping = false;
+
+      if (payload.currentImageDataUrl) {
+        loadImageDataUrl(payload.currentImageDataUrl, (imageData) => {
+          if (imageData) {
+            setCurrentImageData(imageData);
+          } else if (rect && state.cropApplied) {
+            setCurrentImageData(cropImageData(state.originalSourceImageData, rect));
+          }
+          done();
+        });
+        return;
+      }
+
+      if (rect && state.cropApplied) {
+        setCurrentImageData(cropImageData(state.originalSourceImageData, rect));
+      }
+      done();
+      return;
+    }
+
+    state.crop = normalizeCrop((payload && payload.crop) || state.crop);
+    const bounds = cropBounds();
+    state.cropApplied = Boolean(
+      state.sourceImageData &&
+        (bounds.x > 0 ||
+          bounds.y > 0 ||
+          bounds.width < state.sourceImageData.width ||
+          bounds.height < state.sourceImageData.height),
+    );
+    done();
+  }
+
+  function finishRestoreProject(payload) {
+    state.beadWidth = clampInt(payload.beadWidth || 48, 8, beadLimit);
+    state.beadHeight = clampInt(payload.beadHeight || 48, 8, beadLimit);
+    state.lockAspect = payload.lockAspect === undefined ? true : Boolean(payload.lockAspect);
+    state.beadMm = numberOrDefault(payload.beadMm, 5, 2, 10);
+    state.boardWidth = clampInt(payload.boardWidth || 29, 8, 80);
+    state.boardHeight = clampInt(payload.boardHeight || 29, 8, 80);
+    state.alphaThreshold = clampInt(payload.alphaThreshold || 20, 0, 255);
+    state.contrast = clampInt(payload.contrast || 0, -50, 100);
+    state.saturation = clampInt(payload.saturation || 0, -50, 100);
+    state.tolerance = clampInt(payload.tolerance || 54, 0, 160);
+    state.brushSize = clampInt(payload.brushSize || 24, 4, 80);
+    state.samplingMode = validOption(payload.samplingMode, ["shape", "balanced", "smooth"], "balanced");
+    state.cropAspect = validOption(payload.cropAspect, ["free", "original", "1:1", "4:3", "3:4", "16:9", "9:16"], "free");
+    state.coverageThreshold = clampInt(payload.coverageThreshold || 12, 5, 70);
+    state.edgeBoost = clampInt(payload.edgeBoost || 35, 0, 100);
+    state.maxColors = clampInt(payload.maxColors || 24, 2, palette.length);
+    state.dither = payload.dither || "none";
+    state.disabledColors = sanitizeDisabledColors(payload.disabledColors || []);
+    state.replacementMap = sanitizeReplacementMap(payload.replacementMap || []);
+    state.border = normalizeBorderConfig(payload.border || defaultBorderConfig(), paletteById);
+    state.showGrid = payload.showGrid === undefined ? true : Boolean(payload.showGrid);
+    state.showBoard = payload.showBoard === undefined ? true : Boolean(payload.showBoard);
+    state.showCodes = payload.showCodes === undefined ? true : Boolean(payload.showCodes);
+    state.replaceExpanded.clear();
+    state.replaceShowAll.clear();
+    state.transform = { scale: 1, offsetX: 0, offsetY: 0 };
+    syncFormFromState();
+
+    const complete = () => {
+      recomputePattern();
+      renderAll();
+      state.isRestoringDraft = false;
+      scheduleDraftSave();
+      setStatus("项目已载入");
+    };
+
+    if (payload.maskDataUrl) {
+      loadMaskDataUrl(payload.maskDataUrl, complete);
+    } else {
+      complete();
+    }
+  }
+
+  function loadImageDataUrl(dataUrl, done) {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, image.naturalWidth || image.width || 1);
+      canvas.height = Math.max(1, image.naturalHeight || image.height || 1);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      done(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    };
+    image.onerror = () => done(null);
+    image.src = dataUrl;
   }
 
   function loadMaskDataUrl(dataUrl, done) {
@@ -3406,9 +4005,262 @@
     }
   }
 
+  function setCurrentImageData(imageData) {
+    if (!imageData || !imageData.data || !imageData.width || !imageData.height) {
+      return;
+    }
+    state.sourceImageData = imageData;
+    state.sourceCanvas = imageDataToCanvas(imageData);
+    state.mask = new Uint8ClampedArray(imageData.width * imageData.height);
+    initializeMaskFromAlpha();
+    state.maskHistory = [];
+    state.maskVersion += 1;
+    state.maskedCanvas = null;
+    state.maskedVersion = -1;
+  }
+
+  function imageDataToCanvas(imageData) {
+    const canvas = document.createElement("canvas");
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height), 0, 0);
+    return canvas;
+  }
+
+  function sourceAspect() {
+    if (!state.sourceImageData || !state.sourceImageData.width || !state.sourceImageData.height) {
+      return 1;
+    }
+    return state.sourceImageData.height / state.sourceImageData.width;
+  }
+
+  function cropCoordinateSize() {
+    if (state.isCropping && state.originalSourceImageData) {
+      return {
+        width: state.originalSourceImageData.width,
+        height: state.originalSourceImageData.height,
+      };
+    }
+    if (state.sourceImageData) {
+      return {
+        width: state.sourceImageData.width,
+        height: state.sourceImageData.height,
+      };
+    }
+    return { width: 0, height: 0 };
+  }
+
+  function createFullCropRect(width, height) {
+    return {
+      x: 0,
+      y: 0,
+      width: Math.max(1, width),
+      height: Math.max(1, height),
+    };
+  }
+
+  function cropToNormalized(rect, sourceWidth, sourceHeight) {
+    const normalized = normalizeCropRect(rect, sourceWidth, sourceHeight);
+    return {
+      left: normalized.x / sourceWidth,
+      right: (normalized.x + normalized.width) / sourceWidth,
+      top: normalized.y / sourceHeight,
+      bottom: (normalized.y + normalized.height) / sourceHeight,
+    };
+  }
+
+  function normalizeCropRect(rect, sourceWidth, sourceHeight) {
+    let x = Number(rect && rect.x) || 0;
+    let y = Number(rect && rect.y) || 0;
+    let width = Number(rect && rect.width) || sourceWidth;
+    let height = Number(rect && rect.height) || sourceHeight;
+
+    if (width < 0) {
+      x += width;
+      width = Math.abs(width);
+    }
+    if (height < 0) {
+      y += height;
+      height = Math.abs(height);
+    }
+
+    width = clamp(width, minCropSide, sourceWidth);
+    height = clamp(height, minCropSide, sourceHeight);
+    x = clamp(x, 0, Math.max(0, sourceWidth - width));
+    y = clamp(y, 0, Math.max(0, sourceHeight - height));
+    return { x, y, width, height };
+  }
+
+  function isFullCropRect(rect, width, height) {
+    return rect.x <= 0.5 && rect.y <= 0.5 && Math.abs(rect.width - width) <= 1 && Math.abs(rect.height - height) <= 1;
+  }
+
+  function cropImageData(imageData, rect) {
+    if (!imageData || !imageData.data) {
+      return null;
+    }
+    const normalized = normalizeCropRect(rect || createFullCropRect(imageData.width, imageData.height), imageData.width, imageData.height);
+    const left = clampInt(Math.floor(normalized.x), 0, imageData.width - 1);
+    const top = clampInt(Math.floor(normalized.y), 0, imageData.height - 1);
+    const right = clampInt(Math.ceil(normalized.x + normalized.width), left + 1, imageData.width);
+    const bottom = clampInt(Math.ceil(normalized.y + normalized.height), top + 1, imageData.height);
+    const width = right - left;
+    const height = bottom - top;
+    if (width < 1 || height < 1) {
+      return null;
+    }
+
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) {
+      const sourceStart = ((top + y) * imageData.width + left) * 4;
+      const targetStart = y * width * 4;
+      for (let i = 0; i < width * 4; i += 1) {
+        data[targetStart + i] = imageData.data[sourceStart + i];
+      }
+    }
+    return { data, width, height };
+  }
+
+  function currentCropImageData() {
+    if (!state.originalSourceImageData) {
+      return null;
+    }
+    const full = createFullCropRect(state.originalSourceImageData.width, state.originalSourceImageData.height);
+    const rect = state.appliedCropRect ? normalizeCropRect(state.appliedCropRect, full.width, full.height) : full;
+    return isFullCropRect(rect, full.width, full.height) ? state.originalSourceImageData : cropImageData(state.originalSourceImageData, rect);
+  }
+
+  function removeEdgeBackground(imageData, tolerance, alphaThreshold) {
+    if (!imageData || !imageData.data || !imageData.width || !imageData.height) {
+      return null;
+    }
+
+    const width = imageData.width;
+    const height = imageData.height;
+    const source = imageData.data;
+    const data = new Uint8ClampedArray(source);
+    const alphaLimit = clampInt(alphaThreshold, 0, 255, 20);
+    const colorTolerance = clampInt(tolerance, 0, 160, 54);
+    const background = estimateEdgeBackground(source, width, height, alphaLimit);
+    if (!background) {
+      return {
+        imageData: { data, width, height },
+        changed: 0,
+      };
+    }
+
+    const visited = new Uint8Array(width * height);
+    const queue = [];
+    const enqueue = (index) => {
+      if (visited[index] || !edgeBackgroundMatch(data, index, background, colorTolerance, alphaLimit)) {
+        return;
+      }
+      visited[index] = 1;
+      queue.push(index);
+    };
+
+    for (let x = 0; x < width; x += 1) {
+      enqueue(x);
+      enqueue((height - 1) * width + x);
+    }
+    for (let y = 1; y < height - 1; y += 1) {
+      enqueue(y * width);
+      enqueue(y * width + width - 1);
+    }
+
+    let changed = 0;
+    while (queue.length) {
+      const index = queue.pop();
+      const i = index * 4;
+      if (data[i + 3] !== 0) {
+        data[i + 3] = 0;
+        changed += 1;
+      }
+
+      const x = index % width;
+      const y = Math.floor(index / width);
+      if (x > 0) {
+        enqueue(index - 1);
+      }
+      if (x < width - 1) {
+        enqueue(index + 1);
+      }
+      if (y > 0) {
+        enqueue(index - width);
+      }
+      if (y < height - 1) {
+        enqueue(index + width);
+      }
+    }
+
+    return {
+      imageData: { data, width, height },
+      changed,
+    };
+  }
+
+  function estimateEdgeBackground(data, width, height, alphaThreshold) {
+    const buckets = {};
+    const add = (x, y, weight) => {
+      const i = (y * width + x) * 4;
+      if ((data[i + 3] || 0) <= alphaThreshold) {
+        return;
+      }
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const key = [Math.round(r / 24), Math.round(g / 24), Math.round(b / 24)].join(":");
+      const bucket = buckets[key] || { r: 0, g: 0, b: 0, weight: 0 };
+      bucket.r += r * weight;
+      bucket.g += g * weight;
+      bucket.b += b * weight;
+      bucket.weight += weight;
+      buckets[key] = bucket;
+    };
+
+    for (let x = 0; x < width; x += 1) {
+      add(x, 0, 1);
+      add(x, height - 1, 1);
+    }
+    for (let y = 1; y < height - 1; y += 1) {
+      add(0, y, 1);
+      add(width - 1, y, 1);
+    }
+
+    add(0, 0, 8);
+    add(width - 1, 0, 8);
+    add(0, height - 1, 8);
+    add(width - 1, height - 1, 8);
+
+    const dominant = Object.keys(buckets)
+      .map((key) => buckets[key])
+      .sort((a, b) => b.weight - a.weight)[0];
+    if (!dominant || !dominant.weight) {
+      return null;
+    }
+    return {
+      r: dominant.r / dominant.weight,
+      g: dominant.g / dominant.weight,
+      b: dominant.b / dominant.weight,
+    };
+  }
+
+  function edgeBackgroundMatch(data, index, background, tolerance, alphaThreshold) {
+    const i = index * 4;
+    if ((data[i + 3] || 0) <= alphaThreshold) {
+      return true;
+    }
+    const dr = data[i] - background.r;
+    const dg = data[i + 1] - background.g;
+    const db = data[i + 2] - background.b;
+    return dr * dr + dg * dg + db * db <= tolerance * tolerance;
+  }
+
   function cropBounds() {
-    const width = state.sourceCanvas ? state.sourceCanvas.width : 1;
-    const height = state.sourceCanvas ? state.sourceCanvas.height : 1;
+    const size = cropCoordinateSize();
+    const width = size.width || 1;
+    const height = size.height || 1;
     const left = clamp(state.crop.left, 0, 0.95);
     const right = clamp(state.crop.right, left + 0.05, 1);
     const top = clamp(state.crop.top, 0, 0.95);

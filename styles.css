@@ -338,7 +338,7 @@ input[type="file"] {
   box-shadow: 0 8px 24px rgba(21, 33, 45, 0.12);
 }
 
-body.has-pattern:not(.is-image-tab) .preview-controls {
+body.can-zoom-preview .preview-controls {
   display: flex;
 }
 
@@ -622,6 +622,12 @@ body.has-pattern:not(.is-image-tab) .preview-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.crop-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
 }
 
 .project-actions {
