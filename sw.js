@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "pindou-editor-web-v4";
+const CACHE_NAME = "pindou-editor-web-v5";
 const CORE_ASSETS = [
   "./",
   "./index.html",

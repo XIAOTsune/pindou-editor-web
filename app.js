@@ -63,8 +63,8 @@
       top: 0,
       bottom: 1,
     },
-    beadWidth: 64,
-    beadHeight: 64,
+    beadWidth: 48,
+    beadHeight: 48,
     lockAspect: true,
     beadMm: 5,
     boardWidth: 29,
@@ -72,16 +72,16 @@
     alphaThreshold: 20,
     contrast: 0,
     saturation: 0,
-    tolerance: 42,
+    tolerance: 54,
     brushSize: 24,
-    samplingMode: "shape",
+    samplingMode: "balanced",
     cropAspect: "free",
-    coverageThreshold: 18,
+    coverageThreshold: 12,
     edgeBoost: 35,
-    maxColors: 32,
+    maxColors: 24,
     dither: "none",
-    widthDraft: "64",
-    heightDraft: "64",
+    widthDraft: "48",
+    heightDraft: "48",
     disabledColors: new Set(),
     replacementMap: new Map(),
     replaceExpanded: new Set(),
@@ -152,6 +152,7 @@
       "imageInputSecondary",
       "imageInputStart",
       "imageSectionNote",
+      "imageNotice",
       "startActions",
       "imageTools",
       "loadProjectButtonStart",
@@ -169,11 +170,14 @@
       "contrastValue",
       "saturationInput",
       "saturationValue",
+      "resetContrastButton",
+      "resetSaturationButton",
       "autoCutoutButton",
       "undoMaskButton",
       "applyAlphaButton",
       "resetMaskButton",
       "resetCropButton",
+      "cropFocusButton",
       "cropAspectSelect",
       "beadWidthInput",
       "beadHeightInput",
@@ -188,6 +192,7 @@
       "edgeInput",
       "edgeValue",
       "maxColorsInput",
+      "maxColorsValue",
       "ditherSelect",
       "borderEnabledInput",
       "borderControls",
@@ -224,14 +229,32 @@
       button.addEventListener("click", () => switchTab(button.dataset.tab));
     });
 
-    document.querySelectorAll(".segment").forEach((button) => {
+    document.querySelectorAll(".segment[data-tool]").forEach((button) => {
       button.addEventListener("click", () => {
         state.activeTool = button.dataset.tool;
-        document.querySelectorAll(".segment").forEach((node) => {
+        document.querySelectorAll(".segment[data-tool]").forEach((node) => {
           node.classList.toggle("active", node === button);
         });
         els.previewCanvas.style.cursor = "";
         setStatus(toolStatusText());
+      });
+    });
+
+    document.querySelectorAll("[data-select-target]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const select = els[button.dataset.selectTarget];
+        if (!select || select.disabled) {
+          return;
+        }
+        select.value = button.dataset.selectValue || "";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        syncOptionSegments();
+      });
+    });
+
+    document.querySelectorAll("[data-step-field]").forEach((button) => {
+      button.addEventListener("click", () => {
+        stepNumber(button.dataset.stepField, Number(button.dataset.stepDelta) || 0);
       });
     });
 
@@ -269,11 +292,14 @@
       scheduleRecompute();
     });
 
+    els.resetContrastButton.addEventListener("click", () => resetAdjustment("contrast"));
+    els.resetSaturationButton.addEventListener("click", () => resetAdjustment("saturation"));
     els.applyAlphaButton.addEventListener("click", applyAlphaThresholdToMask);
     els.autoCutoutButton.addEventListener("click", autoCutoutBackground);
     els.undoMaskButton.addEventListener("click", undoMaskEdit);
     els.resetMaskButton.addEventListener("click", resetMask);
     els.resetCropButton.addEventListener("click", resetCrop);
+    els.cropFocusButton.addEventListener("click", focusCropTools);
     els.cropAspectSelect.addEventListener("change", () => {
       state.cropAspect = els.cropAspectSelect.value;
       applyCropAspect();
@@ -322,19 +348,14 @@
       onChange: scheduleRecompute,
     });
 
-    bindCommittedNumberInput(els.maxColorsInput, {
-      min: 2,
-      max: palette.length,
-      integer: true,
-      get: () => state.maxColors,
-      set: (value) => {
-        state.maxColors = value;
-      },
-      onChange: scheduleRecompute,
+    bindRange(els.maxColorsInput, els.maxColorsValue, (value) => {
+      state.maxColors = clampInt(value, 2, Math.min(64, palette.length));
+      scheduleRecompute();
     });
     els.samplingModeSelect.addEventListener("change", () => {
       state.samplingMode = els.samplingModeSelect.value;
       scheduleRecompute();
+      syncOptionSegments();
     });
     bindPercentRange(els.coverageInput, els.coverageValue, (value) => {
       state.coverageThreshold = value;
@@ -347,11 +368,13 @@
     els.ditherSelect.addEventListener("change", () => {
       state.dither = els.ditherSelect.value;
       scheduleRecompute();
+      syncOptionSegments();
     });
     els.borderEnabledInput.addEventListener("change", () => {
       state.border.enabled = els.borderEnabledInput.checked;
       scheduleRecompute();
       renderBorderControls();
+      syncTogglePills();
     });
     bindRange(els.borderThicknessInput, els.borderThicknessValue, (value) => {
       state.border.thickness = clampInt(value, 1, 3);
@@ -360,10 +383,12 @@
     els.borderModeSelect.addEventListener("change", () => {
       state.border.mode = validOption(els.borderModeSelect.value, ["outside", "inside", "both"], "outside");
       scheduleRecompute();
+      syncOptionSegments();
     });
     els.borderUnifyInput.addEventListener("change", () => {
       state.border.unifySimilar = els.borderUnifyInput.checked;
       scheduleRecompute();
+      syncTogglePills();
     });
     bindRange(els.borderThresholdInput, els.borderThresholdValue, (value) => {
       state.border.similarityThreshold = clampInt(value, 4, 30);
@@ -396,12 +421,13 @@
 
     els.clearReplaceButton.addEventListener("click", () => {
       state.replacementMap.clear();
+      state.disabledColors.clear();
       state.replaceExpanded.clear();
       state.replaceShowAll.clear();
       recomputePattern();
       renderAll();
       scheduleDraftSave();
-      setStatus("已清空所有颜色替换规则");
+      setStatus("已清空禁用和替换规则");
     });
 
     els.exportPngButton.addEventListener("click", exportPng);
@@ -559,9 +585,9 @@
 
     const nextTabByCurrent = {
       image: "size",
-      size: "palette",
-      palette: "replace",
-      replace: "stats",
+      size: "optimize",
+      optimize: "palette",
+      palette: "stats",
     };
     const nextTab = nextTabByCurrent[state.activeTab];
     if (nextTab) {
@@ -726,6 +752,38 @@
     setStatus("裁剪范围已重置");
   }
 
+  function focusCropTools() {
+    if (!state.sourceCanvas) {
+      setStatus("请先导入图片");
+      return;
+    }
+    state.activeTool = "view";
+    document.querySelectorAll(".segment[data-tool]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.tool === "view");
+    });
+    els.canvasWrap.scrollIntoView({ block: "nearest" });
+    drawPreview();
+    setStatus("拖动裁剪框，拖边缘或角点可调整范围");
+  }
+
+  function resetAdjustment(field) {
+    if (field === "contrast") {
+      state.contrast = 0;
+      els.contrastInput.value = "0";
+      els.contrastValue.value = "0";
+      scheduleRecompute();
+      setStatus("已重置对比度");
+      return;
+    }
+    if (field === "saturation") {
+      state.saturation = 0;
+      els.saturationInput.value = "0";
+      els.saturationValue.value = "0";
+      scheduleRecompute();
+      setStatus("已重置饱和度");
+    }
+  }
+
   function pushMaskHistory() {
     if (!state.mask) {
       return;
@@ -786,6 +844,43 @@
     }
     if (updateBoth || document.activeElement !== els.beadHeightInput) {
       els.beadHeightInput.value = state.heightDraft;
+    }
+  }
+
+  function stepNumber(field, delta) {
+    if (!delta) {
+      return;
+    }
+    if (field === "beadWidth") {
+      applyBeadSize("width", state.beadWidth + delta, true);
+      setStatus("已调整横向颗数");
+      return;
+    }
+    if (field === "beadHeight") {
+      applyBeadSize("height", state.beadHeight + delta, true);
+      setStatus("已调整纵向颗数");
+      return;
+    }
+    if (field === "beadMm") {
+      state.beadMm = clamp(Math.round((state.beadMm + delta) * 2) / 2, 2, 10);
+      els.beadMmInput.value = String(state.beadMm);
+      renderMetrics();
+      scheduleDraftSave();
+      setStatus("已调整单颗规格");
+      return;
+    }
+    if (field === "boardWidth") {
+      state.boardWidth = clampInt(state.boardWidth + delta, 8, 80);
+      els.boardWidthInput.value = String(state.boardWidth);
+      scheduleRecompute();
+      setStatus("已调整板宽");
+      return;
+    }
+    if (field === "boardHeight") {
+      state.boardHeight = clampInt(state.boardHeight + delta, 8, 80);
+      els.boardHeightInput.value = String(state.boardHeight);
+      scheduleRecompute();
+      setStatus("已调整板高");
     }
   }
 
@@ -1369,11 +1464,9 @@
 
     renderMetricCards(els.sizeMetrics, [
       ["总格数", formatNumber(totalCells)],
-      ["实际拼豆", formatNumber(totalBeads)],
-      ["空格", formatNumber(emptyCells)],
-      ["成品尺寸", widthCm + " x " + heightCm + " cm"],
+      ["成品尺寸", widthCm + " x " + heightCm + "cm"],
       ["预计板数", boardCountX + " x " + boardCountY],
-      ["颜色数量", String(state.stats.length)],
+      ["单颗规格", state.beadMm + "mm"],
     ]);
 
     renderMetricCards(els.summaryMetrics, [
@@ -1395,6 +1488,9 @@
     els.workflowNextButton.textContent = workflow.nextLabel;
     els.workflowNextButton.disabled = state.isExporting;
     els.imageSectionNote.textContent = hasImage ? imageStatusText() : "相册或拍照导入，本地处理图片。";
+    if (els.imageNotice) {
+      els.imageNotice.textContent = imageStatusText();
+    }
     els.startActions.classList.toggle("hidden", hasImage);
     els.imageTools.classList.toggle("hidden", !hasImage);
     document.body.classList.toggle("has-image", hasImage);
@@ -1402,6 +1498,8 @@
     document.body.classList.toggle("is-exporting", state.isExporting);
     document.body.classList.toggle("is-image-tab", state.activeTab === "image");
     syncPreviewOptionChips();
+    syncTogglePills();
+    syncOptionSegments();
     updateZoomControls();
 
     document.querySelectorAll(".step-tab").forEach((button) => {
@@ -1418,6 +1516,7 @@
       els.applyAlphaButton,
       els.resetMaskButton,
       els.resetCropButton,
+      els.cropFocusButton,
     ];
     needsImageButtons.forEach((button) => {
       button.disabled = !hasImage || state.isExporting;
@@ -1434,11 +1533,14 @@
     exportButtons.forEach((button) => {
       button.disabled = !hasPattern || state.isExporting;
     });
-    els.exportPngButton.textContent = state.isExporting ? "正在导出" : "保存图纸 PNG";
+    els.exportPngButton.textContent = state.isExporting ? "正在导出" : "保存图纸PNG";
     els.openPngButton.textContent = state.isExporting ? "正在生成图片" : "打开图片";
     els.copyStatsButton.textContent = "复制统计清单";
-    els.exportCsvButton.textContent = "导出 CSV";
+    els.exportCsvButton.textContent = "复制CSV";
     els.exportPdfButton.textContent = "打印/PDF";
+    els.resetContrastButton.disabled = state.isExporting || state.contrast === 0;
+    els.resetSaturationButton.disabled = state.isExporting || state.saturation === 0;
+    els.clearReplaceButton.disabled = state.isExporting || (!state.disabledColors.size && !state.replacementMap.size);
 
     if (!hasImage && state.activeTab !== "image") {
       switchTab("image");
@@ -1458,6 +1560,22 @@
       if (label) {
         label.classList.toggle("active", Boolean(active));
       }
+    });
+  }
+
+  function syncTogglePills() {
+    document.querySelectorAll(".switch-pill[data-switch-for]").forEach((pill) => {
+      const input = els[pill.dataset.switchFor];
+      const active = Boolean(input && input.checked);
+      pill.classList.toggle("active", active);
+      pill.textContent = active ? "开" : "关";
+    });
+  }
+
+  function syncOptionSegments() {
+    document.querySelectorAll("[data-select-target]").forEach((button) => {
+      const select = els[button.dataset.selectTarget];
+      button.classList.toggle("active", Boolean(select && select.value === button.dataset.selectValue));
     });
   }
 
@@ -1515,14 +1633,14 @@
           "颗 / " +
           state.stats.length +
           "色",
-        nextLabel: "保存 PNG",
+        nextLabel: "保存PNG",
       };
     }
     const nextLabels = {
       image: "调尺寸",
-      size: "调色表",
-      palette: "缺色替换",
-      replace: "看统计",
+      size: "去优化",
+      optimize: "调色表",
+      palette: "看统计",
     };
     return {
       title: "图纸已生成",
@@ -1680,81 +1798,59 @@
   function renderReplaceList() {
     const items = computeStats(state.borderedCells);
     if (!items.length) {
-      els.replaceList.innerHTML = '<div class="helper-note">生成图纸后，这里会显示可替换的颜色。</div>';
+      els.replaceList.innerHTML = '<div class="panel-empty">生成后显示主要用色。</div>';
       return;
     }
 
-    els.replaceList.innerHTML = items
-      .map((item) => {
-        const color = item.color;
-        const originalId = color.id;
-        const replacementId = state.replacementMap.get(originalId) || "";
-        const replacement = replacementId ? paletteById.get(replacementId) : null;
-        const expanded = state.replaceExpanded.has(originalId);
-        const showAll = state.replaceShowAll.has(originalId);
-        const options = replacementOptions(originalId);
-        const visibleOptions = showAll ? options : options.slice(0, 16);
-        const optionButtons = visibleOptions.map((candidate, index) => replacementOptionButton(originalId, candidate, replacementId, index)).join("");
-        const moreButton =
-          expanded && options.length > 16
-            ? '<button class="replace-more-button" type="button" data-replace-more="' +
-              originalId +
-              '">' +
-              (showAll ? "收起相近色" : "显示更多相近色") +
-              "</button>"
-            : "";
-        const replaced = Boolean(replacement);
-        const statusText = replacement
-          ? "已替换为 " + replacement.code + " " + replacement.name
-          : "不替换";
-        const controls = expanded
-          ? '<div class="replace-controls"><div class="replacement-grid">' +
-            '<button class="replacement-option no-replace ' +
-            (replacement ? "" : "selected") +
-            '" type="button" data-replace-source="' +
-            originalId +
-            '" data-replace-target="">' +
-            '<span class="replacement-meta"><strong>不替换</strong><span>保留原颜色 ' +
+    const actionItems = items.slice(0, 18);
+    const rules = colorRuleRows();
+    els.replaceList.innerHTML =
+      '<div class="palette-strip">' +
+      actionItems
+        .map((item) => {
+          const color = item.color;
+          const disabled = state.disabledColors.has(color.id);
+          const replacementId = state.replacementMap.get(color.id) || "";
+          const replacement = replacementId ? paletteById.get(replacementId) : null;
+          const status = disabled ? "已禁用" : replacement ? "换 " + replacement.code : formatNumber(item.count);
+          return (
+            '<button class="palette-chip tappable ' +
+            (disabled || replacement ? "active " : "") +
+            '" type="button" data-replace-toggle="' +
+            color.id +
+            '" title="' +
+            escapeHtml(color.code + " " + color.name) +
+            '">' +
+            '<span class="swatch" style="background:' +
+            color.hex +
+            '"></span><span>' +
             color.code +
-            "</span></span>" +
-            '<span class="distance-badge">原色</span></button>' +
-            optionButtons +
-            "</div>" +
-            moreButton +
-            "</div>"
-          : "";
-
-        return (
-          '<div class="replace-item ' +
-          (expanded ? "open" : "") +
-          '">' +
-          '<button class="replace-main" type="button" data-replace-toggle="' +
-          originalId +
-          '" aria-expanded="' +
-          String(expanded) +
-          '">' +
-          '<span class="swatch" style="background:' +
-          color.hex +
-          '"></span>' +
-          '<span class="list-text"><strong>' +
-          color.code +
-          " " +
-          escapeHtml(color.name) +
-          "</strong><span>" +
-          formatNumber(item.count) +
-          " 颗" +
-          " · " +
-          escapeHtml(statusText) +
-          "</span></span>" +
-          (replaced ? '<span class="missing-badge">已替换</span>' : '<span class="missing-badge neutral">原色</span>') +
-          '<span class="replace-chevron" aria-hidden="true">' +
-          (expanded ? "收起" : "展开") +
-          "</span></button>" +
-          controls +
+            "</span><small>" +
+            escapeHtml(status) +
+            "</small></button>"
+          );
+        })
+        .join("") +
+      "</div>" +
+      renderExpandedColorAction() +
+      (rules.length
+        ? '<div class="rule-list">' +
+          rules
+            .map(
+              (rule) =>
+                '<div class="rule-item"><div class="rule-color"><span class="swatch" style="background:' +
+                rule.source.hex +
+                '"></span><span class="rule-copy"><strong>' +
+                escapeHtml(rule.title) +
+                "</strong><span>" +
+                escapeHtml(rule.subtitle) +
+                '</span></span></div><button class="inline-button small-inline" type="button" data-clear-rule="' +
+                rule.source.id +
+                '">撤销</button></div>',
+            )
+            .join("") +
           "</div>"
-        );
-      })
-      .join("");
+        : '<div class="rule-empty">暂无禁用或替换规则。</div>');
 
     els.replaceList.querySelectorAll("button[data-replace-toggle]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1775,9 +1871,14 @@
       button.addEventListener("click", () => {
         const source = button.dataset.replaceSource;
         const target = button.dataset.replaceTarget;
-        if (!target) {
+        if (target === "__disable") {
+          state.disabledColors.add(source);
+          state.replacementMap.delete(source);
+        } else if (!target) {
+          state.disabledColors.delete(source);
           state.replacementMap.delete(source);
         } else {
+          state.disabledColors.delete(source);
           state.replacementMap.set(source, target);
         }
         state.replaceExpanded.delete(source);
@@ -1798,6 +1899,95 @@
         renderReplaceList();
       });
     });
+
+    els.replaceList.querySelectorAll("button[data-clear-rule]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const source = button.dataset.clearRule;
+        state.disabledColors.delete(source);
+        state.replacementMap.delete(source);
+        recomputePattern();
+        renderAll();
+        setStatus("已撤销颜色规则");
+      });
+    });
+  }
+
+  function renderExpandedColorAction() {
+    const sourceId = Array.from(state.replaceExpanded)[0];
+    if (!sourceId) {
+      return "";
+    }
+    const source = paletteById.get(sourceId);
+    if (!source) {
+      return "";
+    }
+    const replacementId = state.replacementMap.get(sourceId) || "";
+    const disabled = state.disabledColors.has(sourceId);
+    const showAll = state.replaceShowAll.has(sourceId);
+    const options = replacementOptions(sourceId);
+    const visibleOptions = showAll ? options : options.slice(0, 10);
+    const optionButtons = visibleOptions.map((candidate, index) => replacementOptionButton(sourceId, candidate, replacementId, index)).join("");
+    const moreButton =
+      options.length > 10
+        ? '<button class="replace-more-button" type="button" data-replace-more="' +
+          sourceId +
+          '">' +
+          (showAll ? "收起相近色" : "显示更多相近色") +
+          "</button>"
+        : "";
+    return (
+      '<div class="replace-controls color-action-panel"><div class="color-action-title"><span class="swatch" style="background:' +
+      source.hex +
+      '"></span><strong>' +
+      source.code +
+      " " +
+      escapeHtml(source.name) +
+      "</strong></div><div class=\"replacement-grid\">" +
+      '<button class="replacement-option no-replace ' +
+      (!replacementId && !disabled ? "selected" : "") +
+      '" type="button" data-replace-source="' +
+      sourceId +
+      '" data-replace-target=""><span class="replacement-meta"><strong>保留原色</strong><span>继续使用 ' +
+      source.code +
+      '</span></span><span class="distance-badge">原色</span></button>' +
+      '<button class="replacement-option no-replace ' +
+      (disabled ? "selected" : "") +
+      '" type="button" data-replace-source="' +
+      sourceId +
+      '" data-replace-target="__disable"><span class="replacement-meta"><strong>禁用此色</strong><span>重新映射到可用色</span></span><span class="distance-badge">禁用</span></button>' +
+      optionButtons +
+      "</div>" +
+      moreButton +
+      "</div>"
+    );
+  }
+
+  function colorRuleRows() {
+    const rows = [];
+    state.disabledColors.forEach((id) => {
+      const source = paletteById.get(id);
+      if (!source) {
+        return;
+      }
+      rows.push({
+        source,
+        title: source.code + " 已禁用",
+        subtitle: "生成时会避开这个颜色",
+      });
+    });
+    state.replacementMap.forEach((targetId, sourceId) => {
+      const source = paletteById.get(sourceId);
+      const target = paletteById.get(targetId);
+      if (!source || !target) {
+        return;
+      }
+      rows.push({
+        source,
+        title: source.code + " -> " + target.code,
+        subtitle: "已替换为 " + target.name,
+      });
+    });
+    return rows;
   }
 
   function replacementOptionButton(sourceId, candidate, selectedId, index) {
@@ -1854,8 +2044,7 @@
 
   function renderStatsTable() {
     if (!state.stats.length) {
-      els.statsBody.innerHTML =
-        '<tr><td colspan="3">生成图纸后显示每种拼豆颜色的数量。</td></tr>';
+      els.statsBody.innerHTML = '<div class="panel-empty">生成图纸后会显示颜色统计。</div>';
       return;
     }
 
@@ -1863,16 +2052,16 @@
       .map((item) => {
         const color = item.color;
         return (
-          "<tr><td>" +
-          '<span class="color-cell"><span class="swatch" style="background:' +
+          '<div class="stats-item"><div class="stats-color"><span class="stats-swatch" style="background:' +
           color.hex +
           '"></span>' +
-          escapeHtml(color.name) +
-          "</span></td><td>" +
+          '<span class="stats-copy"><strong class="stats-code">' +
           color.code +
-          "</td><td>" +
+          '</strong><span class="stats-name">' +
+          escapeHtml(color.name) +
+          "</span></span></div><strong class=\"stats-count\">" +
           formatNumber(item.count) +
-          "</td></tr>"
+          "</strong></div>"
         );
       })
       .join("");
@@ -2690,7 +2879,7 @@
     }, "image/png");
   }
 
-  function exportCsv() {
+  async function exportCsv() {
     if (!state.stats.length) {
       setStatus("请先生成统计");
       return;
@@ -2700,9 +2889,17 @@
       rows.push([item.color.code, item.color.name, item.count, item.color.hex]);
     });
     const csv = rows.map((row) => row.map(csvEscape).join(",")).join("\n");
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
-    downloadUrl(URL.createObjectURL(blob), safeName(state.imageName || "beads") + "-统计.csv");
-    setStatus("已导出 CSV 材料清单");
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(csv);
+      } else {
+        fallbackCopyText(csv);
+      }
+      setStatus("CSV已复制");
+    } catch (error) {
+      fallbackCopyText(csv);
+      setStatus("CSV已复制");
+    }
   }
 
   function printPattern() {
@@ -2957,8 +3154,8 @@
     image.onload = () => {
       setupSourceFromImage(image, payload.imageName || "已载入项目");
       state.crop = normalizeCrop(payload.crop || state.crop);
-      state.beadWidth = clampInt(payload.beadWidth || 64, 8, beadLimit);
-      state.beadHeight = clampInt(payload.beadHeight || 64, 8, beadLimit);
+      state.beadWidth = clampInt(payload.beadWidth || 48, 8, beadLimit);
+      state.beadHeight = clampInt(payload.beadHeight || 48, 8, beadLimit);
       state.lockAspect = Boolean(payload.lockAspect);
       state.beadMm = numberOrDefault(payload.beadMm, 5, 2, 10);
       state.boardWidth = clampInt(payload.boardWidth || 29, 8, 80);
@@ -2966,13 +3163,13 @@
       state.alphaThreshold = clampInt(payload.alphaThreshold || 20, 0, 255);
       state.contrast = clampInt(payload.contrast || 0, -50, 100);
       state.saturation = clampInt(payload.saturation || 0, -50, 100);
-      state.tolerance = clampInt(payload.tolerance || 42, 0, 160);
+      state.tolerance = clampInt(payload.tolerance || 54, 0, 160);
       state.brushSize = clampInt(payload.brushSize || 24, 4, 80);
-      state.samplingMode = validOption(payload.samplingMode, ["shape", "balanced", "smooth"], "shape");
+      state.samplingMode = validOption(payload.samplingMode, ["shape", "balanced", "smooth"], "balanced");
       state.cropAspect = validOption(payload.cropAspect, ["free", "original", "1:1", "4:3", "3:4", "16:9", "9:16"], "free");
-      state.coverageThreshold = clampInt(payload.coverageThreshold || 18, 5, 70);
+      state.coverageThreshold = clampInt(payload.coverageThreshold || 12, 5, 70);
       state.edgeBoost = clampInt(payload.edgeBoost || 35, 0, 100);
-      state.maxColors = clampInt(payload.maxColors || 32, 2, palette.length);
+      state.maxColors = clampInt(payload.maxColors || 24, 2, palette.length);
       state.dither = payload.dither || "none";
       state.disabledColors = sanitizeDisabledColors(payload.disabledColors || []);
       state.replacementMap = sanitizeReplacementMap(payload.replacementMap || []);
@@ -3049,6 +3246,7 @@
     els.edgeInput.value = String(state.edgeBoost);
     els.edgeValue.value = String(state.edgeBoost);
     els.maxColorsInput.value = String(state.maxColors);
+    els.maxColorsValue.value = String(state.maxColors);
     els.ditherSelect.value = state.dither;
     state.border = normalizeBorderConfig(state.border, paletteById);
     els.borderEnabledInput.checked = state.border.enabled;
@@ -3062,6 +3260,8 @@
     els.boardToggle.checked = state.showBoard;
     els.codeToggle.checked = state.showCodes;
     syncPreviewOptionChips();
+    syncTogglePills();
+    syncOptionSegments();
     updateZoomControls();
     renderBorderControls();
     syncCropControls();
@@ -3277,8 +3477,8 @@
     const map = {
       image: "图片工具：魔棒点击背景，橡皮/恢复可拖动修正",
       size: "尺寸工具：调整横向和纵向颗数来控制图纸大小",
-      palette: "色表工具：调整预览显示、颜色数量和可用颜色",
-      replace: "替换工具：为缺失颜色选择相近替代色",
+      optimize: "优化工具：调整对比度、像素策略、抖动和纯色锁边",
+      palette: "色表工具：调整颜色数量、预览显示和缺色处理",
       stats: "统计工具：查看数量并导出图纸或材料清单",
     };
     return map[tab] || "准备就绪";

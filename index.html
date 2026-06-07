@@ -32,6 +32,10 @@
           <button class="ghost-button" id="saveProjectButton" type="button">保存</button>
           <button class="primary-button" id="exportPdfButtonTop" type="button">PDF</button>
         </div>
+        <div class="mini-capsule" aria-hidden="true">
+          <span class="capsule-dots"><i></i><i></i><i></i></span>
+          <span class="capsule-ring"></span>
+        </div>
       </header>
 
       <main class="workspace">
@@ -79,8 +83,8 @@
           <nav class="step-tabs" aria-label="编辑步骤">
             <button class="step-tab active" data-tab="image" type="button">图片</button>
             <button class="step-tab" data-tab="size" type="button">尺寸</button>
+            <button class="step-tab" data-tab="optimize" type="button">优化</button>
             <button class="step-tab" data-tab="palette" type="button">色表</button>
-            <button class="step-tab" data-tab="replace" type="button">替换</button>
             <button class="step-tab" data-tab="stats" type="button">统计</button>
           </nav>
 
@@ -90,10 +94,6 @@
                 <h2>图片</h2>
                 <p id="imageSectionNote">相册或拍照导入，本地处理图片。</p>
               </div>
-              <label class="secondary-button file-label image-change-action">
-                更换图片
-                <input id="imageInputSecondary" type="file" accept="image/*" />
-              </label>
             </div>
 
             <div class="start-actions" id="startActions">
@@ -109,58 +109,72 @@
             </div>
 
             <div class="image-tools hidden" id="imageTools">
-              <div class="segmented" role="group" aria-label="扣图工具">
-                <button class="segment active" data-tool="view" type="button">查看</button>
-                <button class="segment" data-tool="magic" type="button">魔棒</button>
-                <button class="segment" data-tool="erase" type="button">橡皮</button>
-                <button class="segment" data-tool="restore" type="button">恢复</button>
+              <div class="notice" id="imageNotice">当前：整张图片</div>
+
+              <div class="action-stack">
+                <div class="split-actions">
+                  <label class="secondary-button file-label">
+                    更换图片
+                    <input id="imageInputSecondary" type="file" accept="image/*" />
+                  </label>
+                  <button class="primary-button" id="cropFocusButton" type="button">裁剪图片</button>
+                </div>
               </div>
 
-              <label class="field">
-                <span>背景容差</span>
-                <input id="toleranceInput" type="range" min="0" max="160" value="42" />
-                <output id="toleranceValue">42</output>
-              </label>
+              <div class="background-panel">
+                <div class="mini-panel-head">
+                  <strong>去背景</strong>
+                  <span>适合纯色或接近纯色背景</span>
+                </div>
+                <div class="split-actions">
+                  <button class="secondary-button" id="autoCutoutButton" type="button">一键去背景</button>
+                  <button class="secondary-button" id="resetMaskButton" type="button">重置背景</button>
+                </div>
+                <p class="tool-tip">复杂背景建议先用其他工具扣图；下面两个参数只影响去背景和透明判定。</p>
 
-              <label class="field">
-                <span>笔刷大小</span>
-                <input id="brushInput" type="range" min="4" max="80" value="24" />
-                <output id="brushValue">24</output>
-              </label>
+                <label class="slider-control compact-slider">
+                  <span class="slider-head">
+                    <span>背景容差</span>
+                    <output id="toleranceValue">54</output>
+                  </span>
+                  <input id="toleranceInput" type="range" min="0" max="160" value="54" />
+                  <span class="slider-tip">容差越大，越多接近背景色的区域会被移除。</span>
+                </label>
 
-              <label class="field">
-                <span>透明阈值</span>
-                <input id="alphaInput" type="range" min="0" max="255" value="20" />
-                <output id="alphaValue">20</output>
-              </label>
-
-              <label class="field">
-                <span>对比度</span>
-                <input id="contrastInput" type="range" min="-50" max="100" value="0" />
-                <output id="contrastValue">0</output>
-              </label>
-
-              <label class="field">
-                <span>饱和度</span>
-                <input id="saturationInput" type="range" min="-50" max="100" value="0" />
-                <output id="saturationValue">0</output>
-              </label>
-
-              <div class="button-row wrap">
-                <button class="secondary-button" id="autoCutoutButton" type="button">一键去背景</button>
-                <button class="ghost-button" id="undoMaskButton" type="button">撤销扣图</button>
-                <button class="ghost-button" id="applyAlphaButton" type="button">应用透明阈值</button>
-                <button class="danger-button" id="resetMaskButton" type="button">重置背景</button>
+                <label class="slider-control compact-slider">
+                  <span class="slider-head">
+                    <span>透明阈值</span>
+                    <output id="alphaValue">20</output>
+                  </span>
+                  <input id="alphaInput" type="range" min="0" max="255" value="20" />
+                  <span class="slider-tip">阈值越大，越多半透明像素会被当作空白。</span>
+                </label>
               </div>
 
-              <div class="divider"></div>
+              <details class="tool-disclosure">
+                <summary>精修扣图</summary>
+                <div class="segmented" role="group" aria-label="扣图工具">
+                  <button class="segment active" data-tool="view" type="button">查看</button>
+                  <button class="segment" data-tool="magic" type="button">魔棒</button>
+                  <button class="segment" data-tool="erase" type="button">橡皮</button>
+                  <button class="segment" data-tool="restore" type="button">恢复</button>
+                </div>
+                <label class="field">
+                  <span>笔刷大小</span>
+                  <input id="brushInput" type="range" min="4" max="80" value="24" />
+                  <output id="brushValue">24</output>
+                </label>
+                <div class="button-row wrap">
+                  <button class="ghost-button" id="undoMaskButton" type="button">撤销扣图</button>
+                  <button class="ghost-button" id="applyAlphaButton" type="button">应用透明阈值</button>
+                </div>
+              </details>
 
-              <div class="section-head compact">
-                <h3>裁剪图片</h3>
-                <button class="ghost-button small" id="resetCropButton" type="button">重置</button>
+              <div class="section-head compact crop-head">
+                <h3>裁剪比例</h3>
+                <button class="ghost-button small" id="resetCropButton" type="button">恢复整图</button>
               </div>
               <label class="number-field full">
-                <span>裁剪比例</span>
                 <select id="cropAspectSelect">
                   <option value="free" selected>自由</option>
                   <option value="original">原图比例</option>
@@ -184,58 +198,206 @@
           </section>
 
           <section class="tool-section" id="tab-size">
-            <div class="section-head">
-              <h2>图纸尺寸</h2>
+            <div class="tool-head compact-head">
+              <h2 class="section-title">图纸尺寸</h2>
             </div>
 
-            <div class="number-grid">
-              <label class="number-field">
+            <div class="number-stack">
+              <div class="number-card">
                 <span>横向颗数</span>
-                <input id="beadWidthInput" type="number" inputmode="numeric" min="8" max="300" value="64" />
-              </label>
-              <label class="number-field">
+                <div class="stepper">
+                  <button class="stepper-button" data-step-field="beadWidth" data-step-delta="-4" type="button">-</button>
+                  <input id="beadWidthInput" type="number" inputmode="numeric" min="8" max="300" value="48" aria-label="横向颗数" />
+                  <button class="stepper-button" data-step-field="beadWidth" data-step-delta="4" type="button">+</button>
+                </div>
+              </div>
+              <div class="number-card">
                 <span>纵向颗数</span>
-                <input id="beadHeightInput" type="number" inputmode="numeric" min="8" max="300" value="64" />
-              </label>
+                <div class="stepper">
+                  <button class="stepper-button" data-step-field="beadHeight" data-step-delta="-4" type="button">-</button>
+                  <input id="beadHeightInput" type="number" inputmode="numeric" min="8" max="300" value="48" aria-label="纵向颗数" />
+                  <button class="stepper-button" data-step-field="beadHeight" data-step-delta="4" type="button">+</button>
+                </div>
+              </div>
             </div>
 
-            <label class="check-row">
-              <input id="aspectToggle" type="checkbox" checked />
+            <label class="toggle-row" for="aspectToggle">
               <span>锁定图片比例</span>
+              <input class="toggle-native" id="aspectToggle" type="checkbox" checked />
+              <span class="switch-pill" data-switch-for="aspectToggle">开</span>
             </label>
 
-            <div class="number-grid">
-              <label class="number-field">
+            <div class="metric-grid" id="sizeMetrics"></div>
+
+            <div class="number-stack compact-stack">
+              <div class="number-card">
                 <span>单颗毫米</span>
-                <input id="beadMmInput" type="number" inputmode="decimal" min="2" max="10" step="0.5" value="5" />
+                <div class="stepper">
+                  <button class="stepper-button" data-step-field="beadMm" data-step-delta="-0.5" type="button">-</button>
+                  <input id="beadMmInput" type="number" inputmode="decimal" min="2" max="10" step="0.5" value="5" aria-label="单颗毫米" />
+                  <button class="stepper-button" data-step-field="beadMm" data-step-delta="0.5" type="button">+</button>
+                </div>
+              </div>
+              <div class="board-grid">
+                <div class="number-card">
+                  <span>板宽</span>
+                  <div class="stepper small-stepper">
+                    <button class="stepper-button" data-step-field="boardWidth" data-step-delta="-1" type="button">-</button>
+                    <input id="boardWidthInput" type="number" inputmode="numeric" min="8" max="80" value="29" aria-label="板宽" />
+                    <button class="stepper-button" data-step-field="boardWidth" data-step-delta="1" type="button">+</button>
+                  </div>
+                </div>
+                <div class="number-card">
+                  <span>板高</span>
+                  <div class="stepper small-stepper">
+                    <button class="stepper-button" data-step-field="boardHeight" data-step-delta="-1" type="button">-</button>
+                    <input id="boardHeightInput" type="number" inputmode="numeric" min="8" max="80" value="29" aria-label="板高" />
+                    <button class="stepper-button" data-step-field="boardHeight" data-step-delta="1" type="button">+</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-section" id="tab-optimize">
+            <div class="tool-head compact-head">
+              <h2 class="section-title">图像优化</h2>
+            </div>
+
+            <div class="adjust-grid">
+              <label class="slider-control">
+                <span class="slider-head">
+                  <span>对比度</span>
+                  <span class="slider-value-action">
+                    <output id="contrastValue">0</output>
+                    <button class="mini-action" id="resetContrastButton" type="button">重置</button>
+                  </span>
+                </span>
+                <input id="contrastInput" type="range" min="-50" max="100" value="0" />
               </label>
-              <label class="number-field">
-                <span>板宽</span>
-                <input id="boardWidthInput" type="number" inputmode="numeric" min="8" max="60" value="29" />
-              </label>
-              <label class="number-field">
-                <span>板高</span>
-                <input id="boardHeightInput" type="number" inputmode="numeric" min="8" max="60" value="29" />
+
+              <label class="slider-control">
+                <span class="slider-head">
+                  <span>饱和度</span>
+                  <span class="slider-value-action">
+                    <output id="saturationValue">0</output>
+                    <button class="mini-action" id="resetSaturationButton" type="button">重置</button>
+                  </span>
+                </span>
+                <input id="saturationInput" type="range" min="-50" max="100" value="0" />
               </label>
             </div>
 
-            <div class="metric-grid" id="sizeMetrics"></div>
+            <div class="control-row">
+              <span class="control-label">像素策略</span>
+              <select class="control-native" id="samplingModeSelect" aria-label="像素策略">
+                <option value="shape">形状</option>
+                <option value="balanced" selected>均衡</option>
+                <option value="smooth">平滑</option>
+              </select>
+              <div class="segmented option-segmented" role="group" aria-label="像素策略">
+                <button class="segment" data-select-target="samplingModeSelect" data-select-value="shape" type="button">形状</button>
+                <button class="segment" data-select-target="samplingModeSelect" data-select-value="balanced" type="button">均衡</button>
+                <button class="segment" data-select-target="samplingModeSelect" data-select-value="smooth" type="button">平滑</button>
+              </div>
+            </div>
+
+            <div class="control-row">
+              <span class="control-label">抖动</span>
+              <select class="control-native" id="ditherSelect" aria-label="抖动">
+                <option value="none">关闭</option>
+                <option value="ordered">轻微</option>
+              </select>
+              <div class="segmented option-segmented compact-segmented" role="group" aria-label="抖动">
+                <button class="segment" data-select-target="ditherSelect" data-select-value="none" type="button">关闭</button>
+                <button class="segment" data-select-target="ditherSelect" data-select-value="ordered" type="button">轻微</button>
+              </div>
+            </div>
+
+            <label class="slider-control">
+              <span class="slider-head">
+                <span>边缘增强</span>
+                <output id="edgeValue">35</output>
+              </span>
+              <input id="edgeInput" type="range" min="0" max="100" value="35" />
+            </label>
+
+            <label class="toggle-row" for="borderEnabledInput">
+              <span>纯色锁边</span>
+              <input class="toggle-native" id="borderEnabledInput" type="checkbox" />
+              <span class="switch-pill" data-switch-for="borderEnabledInput">关</span>
+            </label>
+            <p class="tool-tip standalone-tip">适合已扣图、有透明边缘的图片；未扣图时可能只沿整张图片外框上色。</p>
+
+            <div class="border-panel" id="borderControls">
+              <div class="border-current">
+                <span class="current-swatch" id="borderColorCurrent"></span>
+                <span class="border-copy" id="borderColorLabel"></span>
+                <span class="edge-pick">
+                  <button class="inline-button" id="borderPickEdgeButton" type="button">边缘取色</button>
+                  <span>建议先扣图，系统会从主体边缘附近选择锁边色。</span>
+                </span>
+              </div>
+
+              <div class="control-row">
+                <span class="control-label">锁边方式</span>
+                <select class="control-native" id="borderModeSelect" aria-label="锁边方式">
+                  <option value="outside">外侧</option>
+                  <option value="inside">内侧</option>
+                  <option value="both">内外</option>
+                </select>
+                <div class="segmented option-segmented" role="group" aria-label="锁边方式">
+                  <button class="segment" data-select-target="borderModeSelect" data-select-value="outside" type="button">外侧</button>
+                  <button class="segment" data-select-target="borderModeSelect" data-select-value="inside" type="button">内侧</button>
+                  <button class="segment" data-select-target="borderModeSelect" data-select-value="both" type="button">内外</button>
+                </div>
+              </div>
+
+              <label class="slider-control">
+                <span class="slider-head">
+                  <span>锁边粗细</span>
+                  <output id="borderThicknessValue">1</output>
+                </span>
+                <input id="borderThicknessInput" type="range" min="1" max="3" value="1" />
+              </label>
+
+              <label class="toggle-row" for="borderUnifyInput">
+                <span>统一边缘近似色</span>
+                <input class="toggle-native" id="borderUnifyInput" type="checkbox" checked />
+                <span class="switch-pill" data-switch-for="borderUnifyInput">开</span>
+              </label>
+
+              <label class="slider-control">
+                <span class="slider-head">
+                  <span>近似色阈值</span>
+                  <output id="borderThresholdValue">10</output>
+                </span>
+                <input id="borderThresholdInput" type="range" min="4" max="30" value="10" />
+              </label>
+
+              <div class="border-palette-strip" id="borderPaletteGrid"></div>
+            </div>
           </section>
 
           <section class="tool-section" id="tab-palette">
-            <div class="section-head">
-              <h2>色表映射</h2>
+            <div class="tool-head compact-head">
+              <h2 class="section-title">色表映射</h2>
             </div>
 
-            <label class="field">
-              <span>前景阈值</span>
-              <input id="coverageInput" type="range" min="5" max="70" value="18" />
-              <output id="coverageValue">18%</output>
+            <label class="slider-control">
+              <span class="slider-head">
+                <span>前景阈值</span>
+                <output id="coverageValue">12%</output>
+              </span>
+              <input id="coverageInput" type="range" min="5" max="70" value="12" />
             </label>
 
-            <label class="number-field full">
-              <span>最多颜色数</span>
-              <input id="maxColorsInput" type="number" inputmode="numeric" min="2" max="64" value="32" />
+            <label class="slider-control">
+              <span class="slider-head">
+                <span>最多颜色数</span>
+                <output id="maxColorsValue">24</output>
+              </span>
+              <input id="maxColorsInput" type="range" min="2" max="64" value="24" />
             </label>
 
             <div class="control-row preview-options-card">
@@ -256,122 +418,45 @@
               </div>
             </div>
 
-            <div class="divider"></div>
-
-            <div class="section-head compact">
-              <h3>图像映射</h3>
-            </div>
-
-            <label class="number-field full">
-              <span>像素策略</span>
-              <select id="samplingModeSelect">
-                <option value="shape" selected>形状优先</option>
-                <option value="balanced">均衡</option>
-                <option value="smooth">照片平滑</option>
-              </select>
-            </label>
-
-            <label class="field">
-              <span>边缘增强</span>
-              <input id="edgeInput" type="range" min="0" max="100" value="35" />
-              <output id="edgeValue">35</output>
-            </label>
-
-            <label class="number-field full">
-              <span>抖动</span>
-              <select id="ditherSelect">
-                <option value="none">关闭</option>
-                <option value="ordered">轻微 Ordered</option>
-              </select>
-            </label>
-
-            <div class="divider"></div>
-
-            <div class="section-head compact">
-              <h3>纯色锁边</h3>
-              <label class="check-row compact-check">
-                <input id="borderEnabledInput" type="checkbox" />
-                <span>启用</span>
-              </label>
-            </div>
-
-            <div class="border-card" id="borderControls">
-              <div class="border-current">
-                <span class="swatch" id="borderColorCurrent"></span>
-                <span class="list-text" id="borderColorLabel"></span>
-                <button class="ghost-button small" id="borderPickEdgeButton" type="button">从边缘取色</button>
+            <div class="color-tool-card">
+              <div class="color-tool-head">
+                <div class="color-tool-copy">
+                  <strong>缺色处理</strong>
+                  <span>点常用色，可换近似色或禁用。</span>
+                </div>
+                <button class="inline-button small-inline" id="clearReplaceButton" type="button">清空规则</button>
               </div>
-              <div class="border-palette-grid" id="borderPaletteGrid"></div>
+              <div class="list-stack" id="replaceList"></div>
+            </div>
 
-              <div class="number-grid">
-                <label class="field compact-field">
-                  <span>粗细</span>
-                  <input id="borderThicknessInput" type="range" min="1" max="3" value="1" />
-                  <output id="borderThicknessValue">1</output>
-                </label>
-                <label class="number-field">
-                  <span>方式</span>
-                  <select id="borderModeSelect">
-                    <option value="outside">外侧加边</option>
-                    <option value="inside">内侧锁边</option>
-                    <option value="both">内外都做</option>
-                  </select>
-                </label>
+            <details class="tool-disclosure palette-all">
+              <summary>全部色表</summary>
+              <div class="helper-note">
+                当前使用 Mard 221 标准色表参考值，仍需实物或官方资料校验。点颜色可禁用，再次点击恢复。
               </div>
-
-              <label class="check-row border-check">
-                <input id="borderUnifyInput" type="checkbox" checked />
-                <span>统一边缘近似色</span>
-              </label>
-              <label class="field compact-field">
-                <span>色差阈值</span>
-                <input id="borderThresholdInput" type="range" min="4" max="30" value="10" />
-                <output id="borderThresholdValue">10</output>
-              </label>
-            </div>
-
-            <div class="helper-note">
-              当前使用 Mard 221 标准色表参考值，仍需实物或官方资料校验。
-            </div>
-
-            <div class="palette-grid" id="paletteGrid"></div>
-          </section>
-
-          <section class="tool-section" id="tab-replace">
-            <div class="section-head">
-              <h2>缺色替换</h2>
-              <button class="ghost-button small" id="clearReplaceButton" type="button">清空</button>
-            </div>
-            <div class="helper-note">
-              替换是全局规则：图纸中所有原颜色都会换成目标颜色，统计会自动合并。
-            </div>
-            <div class="list-stack" id="replaceList"></div>
+              <div class="palette-grid" id="paletteGrid"></div>
+            </details>
           </section>
 
           <section class="tool-section" id="tab-stats">
-            <div class="section-head">
-              <h2>统计与导出</h2>
+            <div class="tool-head compact-head">
+              <h2 class="section-title">统计与导出</h2>
             </div>
             <div class="metric-grid" id="summaryMetrics"></div>
-            <div class="button-row wrap">
-              <button class="primary-button" id="exportPngButton" type="button">导出 PNG</button>
-              <button class="secondary-button" id="openPngButton" type="button">打开图片</button>
-              <button class="secondary-button" id="copyStatsButton" type="button">复制统计</button>
-              <button class="secondary-button" id="exportCsvButton" type="button">导出 CSV</button>
-              <button class="secondary-button" id="exportPdfButton" type="button">打印/PDF</button>
+            <div class="split-actions">
+              <button class="primary-button" id="exportPngButton" type="button">保存图纸PNG</button>
+              <button class="secondary-button" id="exportCsvButton" type="button">复制CSV</button>
             </div>
-            <div class="stats-table-wrap">
-              <table class="stats-table">
-                <thead>
-                  <tr>
-                    <th>颜色</th>
-                    <th>编号</th>
-                    <th>数量</th>
-                  </tr>
-                </thead>
-                <tbody id="statsBody"></tbody>
-              </table>
-            </div>
+            <button class="secondary-button wide-action" id="copyStatsButton" type="button">复制统计清单</button>
+            <details class="tool-disclosure export-more">
+              <summary>更多导出</summary>
+              <div class="split-actions">
+                <button class="secondary-button" id="openPngButton" type="button">打开图片</button>
+                <button class="secondary-button" id="exportPdfButton" type="button">打印/PDF</button>
+              </div>
+              <p class="tool-tip">iPhone 可用“打开图片”后长按保存或分享。</p>
+            </details>
+            <div class="stats-list" id="statsBody"></div>
           </section>
         </aside>
       </main>
