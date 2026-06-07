@@ -41,20 +41,6 @@
               <span id="previewModeLabel">图片预览</span>
               <strong id="previewSizeLabel">未导入</strong>
             </div>
-            <div class="preview-toggles">
-              <label class="switch">
-                <input id="gridToggle" type="checkbox" checked />
-                <span>格线</span>
-              </label>
-              <label class="switch">
-                <input id="boardToggle" type="checkbox" checked />
-                <span>板界</span>
-              </label>
-              <label class="switch">
-                <input id="codeToggle" type="checkbox" checked />
-                <span>色号</span>
-              </label>
-            </div>
           </div>
 
           <div class="canvas-wrap" id="canvasWrap">
@@ -69,6 +55,11 @@
                 导入图片
                 <input id="imageInput" type="file" accept="image/*" />
               </label>
+            </div>
+            <div class="preview-controls" id="previewControls" aria-label="预览缩放">
+              <button class="preview-control" id="zoomOutButton" type="button" aria-label="缩小预览">-</button>
+              <button class="preview-control preview-reset" id="zoomResetButton" type="button" aria-label="重置预览缩放">1x</button>
+              <button class="preview-control" id="zoomInButton" type="button" aria-label="放大预览">+</button>
             </div>
           </div>
 
@@ -236,6 +227,41 @@
               <h2>色表映射</h2>
             </div>
 
+            <label class="field">
+              <span>前景阈值</span>
+              <input id="coverageInput" type="range" min="5" max="70" value="18" />
+              <output id="coverageValue">18%</output>
+            </label>
+
+            <label class="number-field full">
+              <span>最多颜色数</span>
+              <input id="maxColorsInput" type="number" inputmode="numeric" min="2" max="64" value="32" />
+            </label>
+
+            <div class="control-row preview-options-card">
+              <span class="control-label">预览显示</span>
+              <div class="toggle-grid">
+                <label class="option-chip" for="gridToggle">
+                  <input id="gridToggle" type="checkbox" checked />
+                  <span>格线</span>
+                </label>
+                <label class="option-chip" for="boardToggle">
+                  <input id="boardToggle" type="checkbox" checked />
+                  <span>板界</span>
+                </label>
+                <label class="option-chip" for="codeToggle">
+                  <input id="codeToggle" type="checkbox" checked />
+                  <span>色号</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="section-head compact">
+              <h3>图像映射</h3>
+            </div>
+
             <label class="number-field full">
               <span>像素策略</span>
               <select id="samplingModeSelect">
@@ -246,20 +272,9 @@
             </label>
 
             <label class="field">
-              <span>前景阈值</span>
-              <input id="coverageInput" type="range" min="5" max="70" value="18" />
-              <output id="coverageValue">18%</output>
-            </label>
-
-            <label class="field">
               <span>边缘增强</span>
               <input id="edgeInput" type="range" min="0" max="100" value="35" />
               <output id="edgeValue">35</output>
-            </label>
-
-            <label class="number-field full">
-              <span>最多颜色数</span>
-              <input id="maxColorsInput" type="number" inputmode="numeric" min="2" max="64" value="32" />
             </label>
 
             <label class="number-field full">

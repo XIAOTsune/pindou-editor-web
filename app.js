@@ -141,6 +141,10 @@
       "codeToggle",
       "canvasWrap",
       "previewCanvas",
+      "previewControls",
+      "zoomOutButton",
+      "zoomResetButton",
+      "zoomInButton",
       "emptyImport",
       "statusLine",
       "pwaStatus",
@@ -369,19 +373,26 @@
 
     els.gridToggle.addEventListener("change", () => {
       state.showGrid = els.gridToggle.checked;
+      syncPreviewOptionChips();
       drawPreview();
       scheduleDraftSave();
     });
     els.boardToggle.addEventListener("change", () => {
       state.showBoard = els.boardToggle.checked;
+      syncPreviewOptionChips();
       drawPreview();
       scheduleDraftSave();
     });
     els.codeToggle.addEventListener("change", () => {
       state.showCodes = els.codeToggle.checked;
+      syncPreviewOptionChips();
       drawPreview();
       scheduleDraftSave();
     });
+
+    els.zoomOutButton.addEventListener("click", () => zoomPreview(0.82));
+    els.zoomInButton.addEventListener("click", () => zoomPreview(1.22));
+    els.zoomResetButton.addEventListener("click", resetPreviewZoom);
 
     els.clearReplaceButton.addEventListener("click", () => {
       state.replacementMap.clear();
@@ -1389,6 +1400,9 @@
     document.body.classList.toggle("has-image", hasImage);
     document.body.classList.toggle("has-pattern", hasPattern);
     document.body.classList.toggle("is-exporting", state.isExporting);
+    document.body.classList.toggle("is-image-tab", state.activeTab === "image");
+    syncPreviewOptionChips();
+    updateZoomControls();
 
     document.querySelectorAll(".step-tab").forEach((button) => {
       const disabled = !hasImage && button.dataset.tab !== "image";
@@ -1429,6 +1443,42 @@
     if (!hasImage && state.activeTab !== "image") {
       switchTab("image");
     }
+  }
+
+  function syncPreviewOptionChips() {
+    [
+      [els.gridToggle, state.showGrid],
+      [els.boardToggle, state.showBoard],
+      [els.codeToggle, state.showCodes],
+    ].forEach(([input, active]) => {
+      if (!input) {
+        return;
+      }
+      const label = input.closest(".option-chip");
+      if (label) {
+        label.classList.toggle("active", Boolean(active));
+      }
+    });
+  }
+
+  function updateZoomControls() {
+    if (!els.zoomResetButton) {
+      return;
+    }
+    const canZoom = Boolean(state.sourceCanvas && state.finalCells.length && state.activeTab !== "image");
+    els.previewControls.setAttribute("aria-hidden", canZoom ? "false" : "true");
+    [els.zoomOutButton, els.zoomResetButton, els.zoomInButton].forEach((button) => {
+      button.disabled = !canZoom;
+    });
+    els.zoomResetButton.textContent = previewScaleText();
+  }
+
+  function previewScaleText() {
+    const scale = clamp(Number(state.transform.scale) || 1, 0.35, 18);
+    if (Math.abs(scale - 1) < 0.01) {
+      return "1x";
+    }
+    return scale.toFixed(scale < 10 ? 1 : 0) + "x";
   }
 
   function workflowSummary(hasImage, hasPattern, totalBeads) {
@@ -1878,6 +1928,22 @@
     input.remove();
   }
 
+  function zoomPreview(factor) {
+    if (!state.sourceCanvas || !state.finalCells.length || state.activeTab === "image") {
+      setStatus("生成图纸后可缩放预览");
+      return;
+    }
+    state.transform.scale = clamp(state.transform.scale * factor, 0.35, 18);
+    drawPreview();
+    setStatus("预览缩放 " + previewScaleText());
+  }
+
+  function resetPreviewZoom() {
+    state.transform = { scale: 1, offsetX: 0, offsetY: 0 };
+    drawPreview();
+    setStatus("已重置预览缩放");
+  }
+
   function drawPreview() {
     const canvas = els.previewCanvas;
     const wrap = els.canvasWrap;
@@ -1894,6 +1960,8 @@
     ctx.clearRect(0, 0, width, height);
 
     if (!state.sourceCanvas) {
+      state.contentRect = null;
+      updateZoomControls();
       return;
     }
 
@@ -1902,6 +1970,7 @@
     } else {
       drawPatternPreview(ctx, width, height);
     }
+    updateZoomControls();
   }
 
   function drawImagePreview(ctx, width, height) {
@@ -2992,6 +3061,8 @@
     els.gridToggle.checked = state.showGrid;
     els.boardToggle.checked = state.showBoard;
     els.codeToggle.checked = state.showCodes;
+    syncPreviewOptionChips();
+    updateZoomControls();
     renderBorderControls();
     syncCropControls();
   }
@@ -3206,7 +3277,7 @@
     const map = {
       image: "图片工具：魔棒点击背景，橡皮/恢复可拖动修正",
       size: "尺寸工具：调整横向和纵向颗数来控制图纸大小",
-      palette: "色表工具：点击色块可禁用或启用颜色",
+      palette: "色表工具：调整预览显示、颜色数量和可用颜色",
       replace: "替换工具：为缺失颜色选择相近替代色",
       stats: "统计工具：查看数量并导出图纸或材料清单",
     };
